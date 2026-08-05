@@ -16,3 +16,6 @@ pdfs/
 # large local archives (keep tiny test fixtures under fixtures/)
 *.wacz
 !fixtures/*.wacz
+
+# TypeScript build output
+dist/

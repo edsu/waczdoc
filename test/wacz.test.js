@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { listHtmlPages } from "../src/wacz.js";
+import { listHtmlPages } from "../dist/wacz.js";
 import { FIXTURE_1, FIXTURE_2 } from "./helpers.js";
 
 test("listHtmlPages finds the archived HTML page from the CDX index", () => {

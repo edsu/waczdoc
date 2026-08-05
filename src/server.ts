@@ -4,7 +4,8 @@
 //   /sw.js       -> wabac's service worker (from @webrecorder/wabac/dist/sw.js)
 //   /archive.wacz-> the WACZ file, WITH HTTP Range support (wabac reads the
 //                   zip via range requests, so this is mandatory)
-import http from "node:http";
+import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import fs from "node:fs";
 import { resolveWabacSw } from "./util.js";
 
@@ -69,6 +70,11 @@ window.__loadColl = function (name, sourceUrl) {
 </body>
 </html>`;
 
+export type RangeResult =
+  | null
+  | { start: number; end: number }
+  | { unsatisfiable: true };
+
 // Parse an HTTP Range header against a known total size. Returns:
 //   null                     -> no/blank range header (serve the whole file)
 //   { start, end }           -> inclusive byte range to serve (206)
@@ -76,12 +82,13 @@ window.__loadColl = function (name, sourceUrl) {
 // Handles "bytes=a-b", open-ended "bytes=a-", and suffix "bytes=-N" (last N
 // bytes) — the suffix form is what wabac uses to read the zip's
 // end-of-central-directory record, so getting it right is essential.
-export function parseRange(rangeHeader, total) {
+export function parseRange(rangeHeader: string | undefined, total: number): RangeResult {
   if (!rangeHeader) return null;
   const m = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
   if (!m) return null;
 
-  let start, end;
+  let start: number;
+  let end: number;
   if (m[1] === "" && m[2] !== "") {
     const suffix = parseInt(m[2], 10);
     start = Math.max(0, total - suffix);
@@ -96,7 +103,7 @@ export function parseRange(rangeHeader, total) {
   return { start, end };
 }
 
-function serveRange(req, res, filePath) {
+function serveRange(req: IncomingMessage, res: ServerResponse, filePath: string): void {
   const stat = fs.statSync(filePath);
   const total = stat.size;
   const headers = {
@@ -110,7 +117,7 @@ function serveRange(req, res, filePath) {
     fs.createReadStream(filePath).pipe(res);
     return;
   }
-  if (r.unsatisfiable) {
+  if ("unsatisfiable" in r) {
     res.writeHead(416, { "Content-Range": `bytes */${total}` });
     res.end();
     return;
@@ -123,10 +130,16 @@ function serveRange(req, res, filePath) {
   fs.createReadStream(filePath, { start: r.start, end: r.end }).pipe(res);
 }
 
-// Start the server. Returns { port, origin, close() }.
-export function startServer(waczPath) {
+export interface WaczServer {
+  port: number;
+  origin: string;
+  close: () => Promise<void>;
+}
+
+// Start the server. Resolves once it is listening.
+export function startServer(waczPath: string): Promise<WaczServer> {
   const server = http.createServer((req, res) => {
-    const url = new URL(req.url, "http://localhost");
+    const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
 
     if (path === "/" || path === "/index.html") {
@@ -153,11 +166,11 @@ export function startServer(waczPath) {
 
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => {
-      const port = server.address().port;
+      const port = (server.address() as AddressInfo).port;
       resolve({
         port,
         origin: `http://127.0.0.1:${port}`,
-        close: () => new Promise((r) => server.close(r)),
+        close: () => new Promise<void>((r) => server.close(() => r())),
       });
     });
   });

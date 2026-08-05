@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { startServer } from "../src/server.js";
-import { renderPages } from "../src/render.js";
-import { listHtmlPages } from "../src/wacz.js";
+import { startServer } from "../dist/server.js";
+import { renderPages } from "../dist/render.js";
+import { listHtmlPages } from "../dist/wacz.js";
 import { FIXTURE_1, tmpDir } from "./helpers.js";
 
 // Full replay+print path through wabac in headless Chromium. Requires the

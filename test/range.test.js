@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseRange } from "../src/server.js";
+import { parseRange } from "../dist/server.js";
 
 const TOTAL = 1000;
 

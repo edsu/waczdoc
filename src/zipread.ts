@@ -16,7 +16,24 @@ const LOC_SIG = 0x04034b50;
 const U32_MAX = 0xffffffff;
 const U16_MAX = 0xffff;
 
-function readAt(fd, position, length) {
+export interface ZipEntry {
+  name: string;
+  method: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  localHeaderOffset: number;
+}
+
+export interface ZipHandle {
+  entries: ZipEntry[];
+  names(): string[];
+  has(name: string): boolean;
+  read(name: string): Buffer;
+  readMatching(test: (name: string) => boolean): { name: string; data: Buffer }[];
+  close(): void;
+}
+
+function readAt(fd: number, position: number, length: number): Buffer {
   const buf = Buffer.alloc(length);
   let got = 0;
   while (got < length) {
@@ -27,7 +44,7 @@ function readAt(fd, position, length) {
   return got === length ? buf : buf.subarray(0, got);
 }
 
-function findEOCD(fd, size) {
+function findEOCD(fd: number, size: number): { buf: Buffer; off: number; tailStart: number } {
   const maxTail = Math.min(size, 22 + U16_MAX); // EOCD + max comment
   const tail = readAt(fd, size - maxTail, maxTail);
   for (let i = tail.length - 22; i >= 0; i--) {
@@ -39,7 +56,10 @@ function findEOCD(fd, size) {
 }
 
 // Returns { entriesCount, cdOffset, cdSize }, resolving Zip64 when needed.
-function readCentralDirInfo(fd, size) {
+function readCentralDirInfo(
+  fd: number,
+  size: number
+): { entriesCount: number; cdOffset: number; cdSize: number } {
   const { buf, off, tailStart } = findEOCD(fd, size);
   let entriesCount = buf.readUInt16LE(off + 10);
   let cdSize = buf.readUInt32LE(off + 12);
@@ -67,7 +87,7 @@ function readCentralDirInfo(fd, size) {
 }
 
 // Parse a Zip64 extra field, filling in any values that were 0xFFFFFFFF.
-function applyZip64Extra(extra, entry) {
+function applyZip64Extra(extra: Buffer, entry: ZipEntry): void {
   let p = 0;
   while (p + 4 <= extra.length) {
     const id = extra.readUInt16LE(p);
@@ -93,10 +113,10 @@ function applyZip64Extra(extra, entry) {
 }
 
 // Read and parse all central-directory entries.
-function readEntries(fd, size) {
+function readEntries(fd: number, size: number): ZipEntry[] {
   const { entriesCount, cdOffset, cdSize } = readCentralDirInfo(fd, size);
   const cd = readAt(fd, cdOffset, cdSize);
-  const entries = [];
+  const entries: ZipEntry[] = [];
   let p = 0;
   for (let i = 0; i < entriesCount && p + 46 <= cd.length; i++) {
     if (cd.readUInt32LE(p) !== CEN_SIG) break;
@@ -104,7 +124,7 @@ function readEntries(fd, size) {
     const nameLen = cd.readUInt16LE(p + 28);
     const extraLen = cd.readUInt16LE(p + 30);
     const commentLen = cd.readUInt16LE(p + 32);
-    const entry = {
+    const entry: ZipEntry = {
       name: cd.toString("utf8", p + 46, p + 46 + nameLen),
       method,
       compressedSize: cd.readUInt32LE(p + 20),
@@ -120,7 +140,7 @@ function readEntries(fd, size) {
 }
 
 // Read a single entry's bytes, decompressing STORE (0) and DEFLATE (8).
-function readEntryData(fd, entry) {
+function readEntryData(fd: number, entry: ZipEntry): Buffer {
   // The local header repeats the name/extra with possibly different extra
   // length, so read it to find where the data actually starts.
   const loc = readAt(fd, entry.localHeaderOffset, 30);
@@ -136,8 +156,8 @@ function readEntryData(fd, entry) {
   throw new Error(`Unsupported zip compression method ${entry.method}`);
 }
 
-// Public: open a WACZ/zip and expose ranged access to its entries.
-export function openZip(path) {
+// Open a WACZ/zip and expose ranged access to its entries.
+export function openZip(path: string): ZipHandle {
   const fd = fs.openSync(path, "r");
   const size = fs.fstatSync(fd).size;
   const entries = readEntries(fd, size);
@@ -146,18 +166,15 @@ export function openZip(path) {
     entries,
     names: () => entries.map((e) => e.name),
     has: (name) => byName.has(name),
-    // Read an entry by name -> Buffer (decompressed).
     read: (name) => {
       const e = byName.get(name);
       if (!e) throw new Error(`Entry not found in zip: ${name}`);
       return readEntryData(fd, e);
     },
-    // Read every entry whose name matches a predicate.
     readMatching: (test) =>
-      entries.filter((e) => test(e.name)).map((e) => ({
-        name: e.name,
-        data: readEntryData(fd, e),
-      })),
+      entries
+        .filter((e) => test(e.name))
+        .map((e) => ({ name: e.name, data: readEntryData(fd, e) })),
     close: () => fs.closeSync(fd),
   };
 }

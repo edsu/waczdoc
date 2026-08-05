@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { openZip } from "../src/zipread.js";
+import { openZip } from "../dist/zipread.js";
 import { FIXTURE_1 } from "./helpers.js";
 
 test("openZip lists the expected WACZ entries", () => {

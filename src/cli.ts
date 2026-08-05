@@ -3,9 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { listHtmlPages } from "./wacz.js";
 import { startServer } from "./server.js";
-import { renderPages, defaultConcurrency } from "./render.js";
+import { renderPages, defaultConcurrency, type RenderOptions, type RenderResult } from "./render.js";
 
-function usage() {
+interface Args {
+  out: string;
+  format: string;
+  opts: RenderOptions;
+  exclude: string[];
+  include: string[];
+  help?: boolean;
+  list?: boolean;
+  limit?: number;
+  input?: string;
+}
+
+function usage(): void {
   console.log(`wacz-pdf - render HTML pages from a WACZ archive to PDF
 
 Usage:
@@ -29,25 +41,29 @@ Example: --exclude '\\.(png|jpe?g|gif)$' --include '/news/'
 `);
 }
 
-function parseArgs(argv) {
-  const args = { out: "pdfs", format: "Letter", opts: {}, exclude: [], include: [] };
-  const rest = [];
+function parseArgs(argv: string[]): Args {
+  const args: Args = { out: "pdfs", format: "Letter", opts: {}, exclude: [], include: [] };
+  const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") args.help = true;
-    else if (a === "-o" || a === "--out") args.out = argv[++i];
-    else if (a === "--format") args.format = argv[++i];
+    else if (a === "-o" || a === "--out") args.out = argv[++i] ?? args.out;
+    else if (a === "--format") args.format = argv[++i] ?? args.format;
     else if (a === "--landscape") args.opts.landscape = true;
     else if (a === "--single-page") args.opts.singlePage = true;
     else if (a === "-j" || a === "--concurrency") {
       const v = argv[++i];
-      args.opts.concurrency = v === "auto" ? defaultConcurrency() : parseInt(v, 10);
+      args.opts.concurrency = v === "auto" ? defaultConcurrency() : parseInt(v ?? "", 10);
     } else if (a === "--print-media") args.opts.screenMedia = false;
     else if (a === "--list") args.list = true;
-    else if (a === "--limit") args.limit = parseInt(argv[++i], 10);
-    else if (a === "--exclude") args.exclude.push(argv[++i]);
-    else if (a === "--include") args.include.push(argv[++i]);
-    else rest.push(a);
+    else if (a === "--limit") args.limit = parseInt(argv[++i] ?? "", 10);
+    else if (a === "--exclude") {
+      const v = argv[++i];
+      if (v) args.exclude.push(v);
+    } else if (a === "--include") {
+      const v = argv[++i];
+      if (v) args.include.push(v);
+    } else rest.push(a);
   }
   args.input = rest[0];
   args.opts.format = args.format;
@@ -55,18 +71,19 @@ function parseArgs(argv) {
 }
 
 // Compile regex strings, exiting with a clear message on a bad pattern.
-function compile(patterns) {
+function compile(patterns: string[]): RegExp[] {
   return patterns.map((p) => {
     try {
       return new RegExp(p, "i");
     } catch (e) {
-      console.error(`Error: invalid regex ${JSON.stringify(p)}: ${e.message}`);
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`Error: invalid regex ${JSON.stringify(p)}: ${message}`);
       process.exit(1);
     }
   });
 }
 
-async function main() {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.input) {
     usage();
@@ -121,7 +138,7 @@ async function main() {
       outDir: args.out,
       opts: args.opts,
       // Print each page's outcome as it happens, so long runs show progress.
-      onProgress: (r) => {
+      onProgress: (r: RenderResult) => {
         const n = String(r.index + 1).padStart(width, " ");
         if (r.ok) {
           console.error(`  [${n}/${r.total}] ok    ${path.basename(r.file)}`);

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { urlToFilename } from "../src/util.js";
+import { urlToFilename } from "../dist/util.js";
 
 test("root path becomes host_index with an index prefix", () => {
   assert.equal(urlToFilename("http://www.example.com/", 0), "0001_www.example.com_index.pdf");

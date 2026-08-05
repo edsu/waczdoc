@@ -1,22 +1,23 @@
 import { createRequire } from "node:module";
+import path from "node:path";
 
 const require = createRequire(import.meta.url);
 
 // Resolve a path inside an installed package (ESM has no require.resolve).
-export function createRequirePath(spec) {
+export function createRequirePath(spec: string): string {
   return require.resolve(spec);
 }
 
 // wabac only exports "." and "./swlib", so its sw.js is not directly
 // resolvable. Resolve the main entry and find sw.js as a sibling in dist/.
-export function resolveWabacSw() {
+export function resolveWabacSw(): string {
   const main = require.resolve("@webrecorder/wabac"); // .../dist/index.js
-  return require("node:path").join(require("node:path").dirname(main), "sw.js");
+  return path.join(path.dirname(main), "sw.js");
 }
 
 // Turn a URL into a safe-ish filename for the output PDF.
-export function urlToFilename(u, index) {
-  let name;
+export function urlToFilename(u: string, index: number): string {
+  let name: string;
   try {
     const parsed = new URL(u);
     let p = parsed.pathname;

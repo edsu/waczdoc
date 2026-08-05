@@ -2,10 +2,12 @@
   "name": "wacz-pdf",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/cli.js",
   "scripts": {
-    "test": "node --test",
-    "test:unit": "node --test test/range.test.js test/util.test.js test/zipread.test.js test/wacz.test.js"
+    "test": "tsc && node --test",
+    "test:unit": "tsc && node --test test/range.test.js test/util.test.js test/zipread.test.js test/wacz.test.js",
+    "build": "tsc",
+    "prepublishOnly": "tsc"
   },
   "keywords": [],
   "author": "",
@@ -13,10 +15,16 @@
   "type": "module",
   "dependencies": {
     "@webrecorder/wabac": "^2.26.6",
-    "adm-zip": "^0.6.0",
     "playwright": "^1.62.1"
   },
   "bin": {
-    "wacz-pdf": "src/cli.js"
-  }
+    "wacz-pdf": "dist/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2"
+  },
+  "files": [
+    "dist"
+  ]
 }
