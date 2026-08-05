@@ -1,7 +1,7 @@
 {
   "name": "wacz-pdf",
   "version": "1.0.0",
-  "description": "",
+  "description": "Render the HTML pages in a WACZ web archive to PDF, one per page, via wabac.js replay in headless Chromium",
   "main": "dist/cli.js",
   "scripts": {
     "test": "tsc && node --test",
@@ -10,9 +10,20 @@
     "prepublishOnly": "tsc",
     "lint": "eslint ."
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "wacz",
+    "warc",
+    "web-archive",
+    "webrecorder",
+    "wabac",
+    "pdf",
+    "playwright",
+    "archiving",
+    "replay",
+    "cdx"
+  ],
+  "author": "ehs@pobox.com",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "@webrecorder/wabac": "^2.26.6",
@@ -32,5 +43,16 @@
   "files": [
     "dist",
     "examples"
-  ]
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/edsu/wacz-pdf.git"
+  },
+  "homepage": "https://github.com/edsu/wacz-pdf#readme",
+  "bugs": {
+    "url": "https://github.com/edsu/wacz-pdf/issues"
+  }
 }
