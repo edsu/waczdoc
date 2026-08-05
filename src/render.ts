@@ -20,6 +20,7 @@ export interface RenderOptions {
   settleMs?: number;
   singlePage?: boolean;
   concurrency?: number;
+  inject?: string;
 }
 
 export interface RenderResult extends WaczPage {
@@ -36,6 +37,7 @@ interface Cfg {
   settleMs: number;
   singlePage: boolean;
   pdfBase: PdfOptions;
+  inject?: string;
 }
 
 // Loose view of the helpers we inject on the page in server.ts's INDEX_HTML.
@@ -58,7 +60,7 @@ async function renderOne(
   index: number,
   cfg: Cfg
 ): Promise<RenderResult> {
-  const { outDir, timeout, settleMs, singlePage, pdfBase } = cfg;
+  const { outDir, timeout, settleMs, singlePage, pdfBase, inject } = cfg;
   const file = path.join(outDir, urlToFilename(p.url, index));
   const target = replayUrl(origin, p.timestamp, p.url);
   try {
@@ -98,6 +100,18 @@ async function renderOne(
       : true;
     if (notFound) {
       return { ...p, file, ok: false, error: "not found in archive during replay", index };
+    }
+
+    // Run the user's injection script inside the replayed page, before
+    // measuring/printing — e.g. to remove modal overlays or unlock scrolling.
+    // Wrapped in an async IIFE and run via Playwright's evaluation channel,
+    // which is not subject to the archived page's CSP. Best-effort: a failing
+    // script must not fail the render.
+    if (inject && frame) {
+      await frame
+        .evaluate(`(async () => { ${inject}\n})()`)
+        .catch(() => {});
+      await page.waitForTimeout(150); // let any reflow settle
     }
 
     // Grow the iframe to its content height so the whole page prints.
@@ -174,6 +188,7 @@ export async function renderPages(
     settleMs = 700,
     singlePage = false,
     concurrency = 1,
+    inject,
   } = opts;
 
   const workers = Math.max(1, Math.min(concurrency, pages.length));
@@ -184,6 +199,7 @@ export async function renderPages(
     timeout,
     settleMs,
     singlePage,
+    inject,
     pdfBase: {
       format: format as PdfOptions["format"],
       landscape,

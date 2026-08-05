@@ -11,6 +11,7 @@ interface Args {
   opts: RenderOptions;
   exclude: string[];
   include: string[];
+  injects: string[];
   help?: boolean;
   list?: boolean;
   limit?: number;
@@ -34,15 +35,28 @@ Options:
       --limit <n>       Render at most n pages
       --exclude <re>    Skip pages whose URL matches this regex (repeatable)
       --include <re>    Keep only pages whose URL matches this regex (repeatable)
+      --inject <js>     Run JS in each page before printing; use @file to read
+                        from a file. Repeatable. (e.g. remove modal overlays)
   -h, --help            Show this help
 
 Regexes are JavaScript syntax, matched against the full URL, case-insensitive.
 Example: --exclude '\\.(png|jpe?g|gif)$' --include '/news/'
+
+Injection runs inside the replayed page after it loads. Example: dismiss a
+sign-in overlay and unlock scrolling --
+  --inject "document.querySelectorAll('.modal,[role=dialog]').forEach(e=>e.remove());document.documentElement.style.overflow='auto'"
 `);
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { out: "pdfs", format: "Letter", opts: {}, exclude: [], include: [] };
+  const args: Args = {
+    out: "pdfs",
+    format: "Letter",
+    opts: {},
+    exclude: [],
+    include: [],
+    injects: [],
+  };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -63,6 +77,9 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "--include") {
       const v = argv[++i];
       if (v) args.include.push(v);
+    } else if (a === "--inject") {
+      const v = argv[++i];
+      if (v) args.injects.push(v);
     } else rest.push(a);
   }
   args.input = rest[0];
@@ -93,6 +110,21 @@ async function main(): Promise<void> {
     console.error(`Error: file not found: ${args.input}`);
     process.exit(1);
   }
+
+  // Resolve --inject values: "@path" reads from a file, anything else is
+  // treated as inline JavaScript. Combined in order into one script.
+  const injectParts = args.injects.map((v) => {
+    if (v.startsWith("@")) {
+      const file = v.slice(1);
+      if (!fs.existsSync(file)) {
+        console.error(`Error: inject file not found: ${file}`);
+        process.exit(1);
+      }
+      return fs.readFileSync(file, "utf8");
+    }
+    return v;
+  });
+  if (injectParts.length) args.opts.inject = injectParts.join("\n;\n");
 
   console.error(`Reading CDX index from ${path.basename(args.input)} ...`);
   let pages = listHtmlPages(args.input);

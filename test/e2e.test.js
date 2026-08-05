@@ -42,3 +42,32 @@ test(
     }
   }
 );
+
+test(
+  "an injected script runs without breaking the render",
+  { skip, timeout: 120000 },
+  async () => {
+    const pages = listHtmlPages(FIXTURE_1);
+    const { dir, cleanup } = tmpDir();
+    try {
+      const server = await startServer(FIXTURE_1);
+      try {
+        const results = await renderPages(pages, {
+          origin: server.origin,
+          outDir: dir,
+          opts: {
+            inject:
+              "document.querySelectorAll('.modal,[role=dialog]').forEach(e=>e.remove());" +
+              "document.documentElement.style.overflow='auto';",
+          },
+        });
+        assert.equal(results[0].ok, true, results[0].error || "render failed");
+        assert.ok(fs.existsSync(results[0].file));
+      } finally {
+        await server.close();
+      }
+    } finally {
+      cleanup();
+    }
+  }
+);

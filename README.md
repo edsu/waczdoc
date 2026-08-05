@@ -44,6 +44,7 @@ node src/cli.js archive.wacz -o pdfs --format A4 --landscape --print-media --lim
 | `--exclude <re>` | Skip pages whose URL matches this regex (repeatable) |
 | `--list` | List the HTML pages found, don't render |
 | `--limit <n>` | Render at most `n` pages |
+| `--inject <js>` | Run JS in each page before printing; `@file` reads from a file (repeatable) |
 
 URL filters use JavaScript regex syntax, matched case-insensitively against the
 full URL. `--include` is applied before `--exclude`. Example: only article
@@ -61,6 +62,30 @@ WACZ ─► read CDX index (HTML 200s)           src/wacz.js
 Replay content is loaded inside an iframe rather than the top frame: wabac
 serves iframe requests as rewritten replay content, whereas a top-frame
 navigation returns its interactive replay UI instead.
+
+## Injecting JavaScript
+
+Archived pages sometimes capture a modal ("register or sign in") overlaying the
+content, with the page scroll-locked behind it. The content is still in the
+DOM — the overlay is just painted on top. `--inject` runs a snippet inside the
+replayed page, after it loads but before it's printed, so you can clean it up:
+
+```sh
+# inline
+wacz-pdf archive.wacz --inject \
+  "document.querySelectorAll('.modal,[role=dialog]').forEach(e=>e.remove());\
+   document.documentElement.style.overflow='auto'"
+
+# or from a file (repeatable), e.g. a reusable cleanup.js
+wacz-pdf archive.wacz --inject @cleanup.js
+```
+
+Notes:
+- The script runs in the replayed page's own context (the iframe), via
+  Playwright's evaluation channel, so it works even when the archived page sets
+  a restrictive Content-Security-Policy.
+- It's best-effort: a script that throws logs nothing and does not fail the
+  page's render, so write defensively (e.g. optional chaining).
 
 ## Development
 
