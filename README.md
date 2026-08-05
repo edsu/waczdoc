@@ -62,6 +62,16 @@ Replay content is loaded inside an iframe rather than the top frame: wabac
 serves iframe requests as rewritten replay content, whereas a top-frame
 navigation returns its interactive replay UI instead.
 
+## Tests
+
+```sh
+npm test          # unit + end-to-end (renders a fixture to PDF)
+npm run test:unit # unit only (no browser needed)
+```
+
+The end-to-end test needs the Playwright Chromium browser
+(`npx playwright install chromium`); set `WACZ_PDF_SKIP_E2E=1` to skip it.
+
 ## Performance
 
 Rendering is CPU-bound: each page is a real Chromium render. By default pages

@@ -69,46 +69,58 @@ window.__loadColl = function (name, sourceUrl) {
 </body>
 </html>`;
 
+// Parse an HTTP Range header against a known total size. Returns:
+//   null                     -> no/blank range header (serve the whole file)
+//   { start, end }           -> inclusive byte range to serve (206)
+//   { unsatisfiable: true }  -> range can't be satisfied (416)
+// Handles "bytes=a-b", open-ended "bytes=a-", and suffix "bytes=-N" (last N
+// bytes) — the suffix form is what wabac uses to read the zip's
+// end-of-central-directory record, so getting it right is essential.
+export function parseRange(rangeHeader, total) {
+  if (!rangeHeader) return null;
+  const m = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
+  if (!m) return null;
+
+  let start, end;
+  if (m[1] === "" && m[2] !== "") {
+    const suffix = parseInt(m[2], 10);
+    start = Math.max(0, total - suffix);
+    end = total - 1;
+  } else {
+    start = m[1] ? parseInt(m[1], 10) : 0;
+    end = m[2] ? parseInt(m[2], 10) : total - 1;
+  }
+  if (isNaN(start)) start = 0;
+  if (isNaN(end) || end >= total) end = total - 1;
+  if (start > end || start >= total) return { unsatisfiable: true };
+  return { start, end };
+}
+
 function serveRange(req, res, filePath) {
   const stat = fs.statSync(filePath);
   const total = stat.size;
-  const range = req.headers.range;
   const headers = {
     "Accept-Ranges": "bytes",
     "Content-Type": "application/octet-stream",
     "Access-Control-Allow-Origin": "*",
   };
-  if (range) {
-    const m = /bytes=(\d*)-(\d*)/.exec(range);
-    let start, end;
-    if (m && m[1] === "" && m[2] !== "") {
-      // Suffix range: "bytes=-N" means the LAST N bytes. wabac uses this to
-      // read the zip's end-of-central-directory record; serving from offset 0
-      // instead makes it misparse the archive as empty.
-      const suffix = parseInt(m[2], 10);
-      start = Math.max(0, total - suffix);
-      end = total - 1;
-    } else {
-      start = m && m[1] ? parseInt(m[1], 10) : 0;
-      end = m && m[2] ? parseInt(m[2], 10) : total - 1;
-    }
-    if (isNaN(start)) start = 0;
-    if (isNaN(end) || end >= total) end = total - 1;
-    if (start > end || start >= total) {
-      res.writeHead(416, { "Content-Range": `bytes */${total}` });
-      res.end();
-      return;
-    }
-    res.writeHead(206, {
-      ...headers,
-      "Content-Range": `bytes ${start}-${end}/${total}`,
-      "Content-Length": end - start + 1,
-    });
-    fs.createReadStream(filePath, { start, end }).pipe(res);
-  } else {
+  const r = parseRange(req.headers.range, total);
+  if (!r) {
     res.writeHead(200, { ...headers, "Content-Length": total });
     fs.createReadStream(filePath).pipe(res);
+    return;
   }
+  if (r.unsatisfiable) {
+    res.writeHead(416, { "Content-Range": `bytes */${total}` });
+    res.end();
+    return;
+  }
+  res.writeHead(206, {
+    ...headers,
+    "Content-Range": `bytes ${r.start}-${r.end}/${total}`,
+    "Content-Length": r.end - r.start + 1,
+  });
+  fs.createReadStream(filePath, { start: r.start, end: r.end }).pipe(res);
 }
 
 // Start the server. Returns { port, origin, close() }.
