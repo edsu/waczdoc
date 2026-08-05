@@ -80,6 +80,10 @@ wacz-pdf archive.wacz --inject \
 wacz-pdf archive.wacz --inject @cleanup.js
 ```
 
+See `examples/dismiss-modal.js` for a starting-point script that removes a
+"register / sign in to keep reading" modal and unlocks page scrolling so the
+underlying article prints.
+
 Notes:
 - The script runs in the replayed page's own context (the iframe), via
   Playwright's evaluation channel, so it works even when the archived page sets
