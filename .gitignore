@@ -1,0 +1,18 @@
+# dependencies
+node_modules/
+
+# render output
+out/
+out2/
+pdfs/
+*.pdf
+
+# local editor/agent settings
+.claude/settings.local.json
+
+# macOS
+.DS_Store
+
+# large local archives (keep tiny test fixtures under fixtures/)
+*.wacz
+!fixtures/*.wacz
