@@ -62,15 +62,20 @@ Replay content is loaded inside an iframe rather than the top frame: wabac
 serves iframe requests as rewritten replay content, whereas a top-frame
 navigation returns its interactive replay UI instead.
 
-## Tests
+## Development
+
+The source is TypeScript under `src/`, compiled to `dist/` with `tsc`.
 
 ```sh
-npm test          # unit + end-to-end (renders a fixture to PDF)
-npm run test:unit # unit only (no browser needed)
+npm run build     # compile src/ -> dist/
+npm run lint      # eslint
+npm test          # build, then unit + end-to-end (renders a fixture to PDF)
+npm run test:unit # build, then unit only (no browser needed)
 ```
 
 The end-to-end test needs the Playwright Chromium browser
 (`npx playwright install chromium`); set `WACZ_PDF_SKIP_E2E=1` to skip it.
+CI (GitHub Actions) runs lint, build, and the full test suite on push and PRs.
 
 ## Performance
 

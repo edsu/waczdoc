@@ -105,7 +105,6 @@ function applyZip64Extra(extra: Buffer, entry: ZipEntry): void {
       }
       if (entry.localHeaderOffset === U32_MAX && q + 8 <= body.length) {
         entry.localHeaderOffset = Number(body.readBigUInt64LE(q));
-        q += 8;
       }
     }
     p += 4 + sz;

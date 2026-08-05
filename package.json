@@ -7,7 +7,8 @@
     "test": "tsc && node --test",
     "test:unit": "tsc && node --test test/range.test.js test/util.test.js test/zipread.test.js test/wacz.test.js",
     "build": "tsc",
-    "prepublishOnly": "tsc"
+    "prepublishOnly": "tsc",
+    "lint": "eslint ."
   },
   "keywords": [],
   "author": "",
@@ -21,8 +22,12 @@
     "wacz-pdf": "dist/cli.js"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.2",
-    "typescript": "^7.0.2"
+    "eslint": "^10.8.0",
+    "globals": "^17.9.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.66.0"
   },
   "files": [
     "dist"

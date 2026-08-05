@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import path from "node:path";
 import { startServer } from "../dist/server.js";
 import { renderPages } from "../dist/render.js";
 import { listHtmlPages } from "../dist/wacz.js";
