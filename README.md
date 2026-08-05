@@ -1,12 +1,12 @@
 # wacz-pdf
 
 Render the HTML pages inside a [WACZ](https://specs.webrecorder.net/wacz/1.1.1/)
-web archive to PDF files — one PDF per page.
+web archive to PDF files, one PDF per page.
 
 It finds pages by scanning the archive's **CDX index** for `text/html` captures
 (status `200`), then replays each page through
-[wabac.js](https://github.com/webrecorder/wabac.js) — Webrecorder's own replay
-engine — running as a service worker inside headless Chromium, so subresources
+[wabac.js](https://github.com/webrecorder/wabac.js), which is Webrecorder's own replay
+engine, running as a service worker inside headless Chromium, so subresources
 (CSS, JS, images, fonts) are served from the archive and the page renders
 faithfully. Each replayed page is then printed with `page.pdf()`.
 
@@ -15,20 +15,24 @@ faithfully. Each replayed page is then printed with `page.pdf()`.
 ```sh
 npm install
 npx playwright install chromium
+npm run build            # compile src/ (TypeScript) -> dist/
 ```
 
 ## Usage
 
 ```sh
 # Render every HTML page in the archive to ./pdfs/
-node src/cli.js archive.wacz -o pdfs
+node dist/cli.js archive.wacz -o pdfs
 
 # Just list the HTML pages found (no rendering)
-node src/cli.js archive.wacz --list
+node dist/cli.js archive.wacz --list
 
 # A4, landscape, print stylesheet, first 10 pages only
-node src/cli.js archive.wacz -o pdfs --format A4 --landscape --print-media --limit 10
+node dist/cli.js archive.wacz -o pdfs --format A4 --landscape --print-media --limit 10
 ```
+
+(Or run `npm link` once to get a global `wacz-pdf` command and use that in
+place of `node dist/cli.js`.)
 
 ### Options
 
@@ -48,15 +52,15 @@ node src/cli.js archive.wacz -o pdfs --format A4 --landscape --print-media --lim
 
 URL filters use JavaScript regex syntax, matched case-insensitively against the
 full URL. `--include` is applied before `--exclude`. Example: only article
-pages, minus tag listings — `--include '/\\d{4}/' --exclude '/tag/'`.
+pages, minus tag listings: `--include '/\\d{4}/' --exclude '/tag/'`.
 
 ## How it works
 
 ```
-WACZ ─► read CDX index (HTML 200s)           src/wacz.js
-     ─► serve sw.js + WACZ (HTTP Range)       src/server.js
+WACZ ─► read CDX index (HTML 200s)           src/wacz.ts
+     ─► serve sw.js + WACZ (HTTP Range)       src/server.ts
      ─► headless Chromium + wabac service worker
-        └─ replay each page in an <iframe> ─► page.pdf()   src/render.js
+        └─ replay each page in an <iframe> ─► page.pdf()   src/render.ts
 ```
 
 Replay content is loaded inside an iframe rather than the top frame: wabac
@@ -110,7 +114,7 @@ CI (GitHub Actions) runs lint, build, and the full test suite on push and PRs.
 
 Rendering is CPU-bound: each page is a real Chromium render. By default pages
 render one at a time. Pass `-j <n>` (or `-j auto`) to render several in
-parallel — each runs in its own tab/renderer process, so it scales roughly
+parallel, where each runs in its own tab/renderer process, so it scales roughly
 linearly up to your physical core count.
 
 All tabs share a single browser and a single wabac service worker, so the
