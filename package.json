@@ -30,6 +30,7 @@
     "typescript-eslint": "^8.66.0"
   },
   "files": [
-    "dist"
+    "dist",
+    "examples"
   ]
 }

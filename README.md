@@ -12,27 +12,42 @@ faithfully. Each replayed page is then printed with `page.pdf()`.
 
 ## Install
 
+Rendering uses Playwright's Chromium, so download it once (a one-time
+~150 MB fetch into Playwright's shared cache):
+
 ```sh
-npm install
 npx playwright install chromium
-npm run build            # compile src/ (TypeScript) -> dist/
 ```
+
+Then either run without installing:
+
+```sh
+npx wacz-pdf archive.wacz -o pdfs
+```
+
+or install globally for a `wacz-pdf` command on your PATH:
+
+```sh
+npm install -g wacz-pdf
+wacz-pdf archive.wacz -o pdfs
+```
+
+Requires Node.js 18+.
 
 ## Usage
 
 ```sh
 # Render every HTML page in the archive to ./pdfs/
-node dist/cli.js archive.wacz -o pdfs
+wacz-pdf archive.wacz -o pdfs
 
 # Just list the HTML pages found (no rendering)
-node dist/cli.js archive.wacz --list
+wacz-pdf archive.wacz --list
 
 # A4, landscape, print stylesheet, first 10 pages only
-node dist/cli.js archive.wacz -o pdfs --format A4 --landscape --print-media --limit 10
+wacz-pdf archive.wacz -o pdfs --format A4 --landscape --print-media --limit 10
 ```
 
-(Or run `npm link` once to get a global `wacz-pdf` command and use that in
-place of `node dist/cli.js`.)
+(With `npx`, prefix each command with `npx `, e.g. `npx wacz-pdf archive.wacz --list`.)
 
 ### Options
 
@@ -100,11 +115,18 @@ Notes:
 The source is TypeScript under `src/`, compiled to `dist/` with `tsc`.
 
 ```sh
+git clone <repo> && cd wacz-pdf
+npm install
+npx playwright install chromium
+
 npm run build     # compile src/ -> dist/
 npm run lint      # eslint
 npm test          # build, then unit + end-to-end (renders a fixture to PDF)
 npm run test:unit # build, then unit only (no browser needed)
 ```
+
+Run the local build with `node dist/cli.js <archive.wacz> …` (or `npm link`
+once for a global `wacz-pdf` that points at your working copy).
 
 The end-to-end test needs the Playwright Chromium browser
 (`npx playwright install chromium`); set `WACZ_PDF_SKIP_E2E=1` to skip it.
