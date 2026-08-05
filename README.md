@@ -82,6 +82,24 @@ Replay content is loaded inside an iframe rather than the top frame: wabac
 serves iframe requests as rewritten replay content, whereas a top-frame
 navigation returns its interactive replay UI instead.
 
+### Reading the WACZ
+
+The page list comes from a small, self-contained ZIP reader (`src/zipread.ts`)
+that parses the archive's central directory and reads just the CDX index and
+`pages.jsonl` by byte range, so multi-gigabyte archives never have to be loaded
+whole. This is deliberately hand-rolled rather than pulled from a library:
+
+- There is no `wacz` package on npm. `@harvard-lil/js-wacz` is for *creating*
+  and validating WACZ files, not enumerating pages to render.
+- `@webrecorder/wabac` (already a dependency, for replay) exposes a
+  `ZipRangeReader`, but its loaders are browser-oriented (`fetch`, `Blob`,
+  `FileSystemFileHandle`) with no Node filesystem loader — using it here would
+  mean writing an `fs`-backed loader anyway, i.e. re-implementing what
+  `zipread.ts` already does, while coupling to an undocumented internal API.
+
+So the reader stays local: a couple hundred lines of synchronous, dependency-
+free, Zip64-aware code scoped exactly to the need.
+
 ## Injecting JavaScript
 
 Archived pages sometimes capture a modal ("register or sign in") overlaying the
