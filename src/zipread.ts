@@ -29,6 +29,7 @@ export interface ZipHandle {
   names(): string[];
   has(name: string): boolean;
   read(name: string): Buffer;
+  readRange(name: string, offset: number, length: number): Buffer;
   readMatching(test: (name: string) => boolean): { name: string; data: Buffer }[];
   close(): void;
 }
@@ -138,18 +139,19 @@ function readEntries(fd: number, size: number): ZipEntry[] {
   return entries;
 }
 
-// Read a single entry's bytes, decompressing STORE (0) and DEFLATE (8).
-function readEntryData(fd: number, entry: ZipEntry): Buffer {
-  // The local header repeats the name/extra with possibly different extra
-  // length, so read it to find where the data actually starts.
+// Where an entry's data begins. The local header repeats the name/extra with
+// a possibly different extra length, so it has to be read to find out.
+function entryDataStart(fd: number, entry: ZipEntry): number {
   const loc = readAt(fd, entry.localHeaderOffset, 30);
   if (loc.readUInt32LE(0) !== LOC_SIG) {
     throw new Error(`Bad local header for ${entry.name}`);
   }
-  const nameLen = loc.readUInt16LE(26);
-  const extraLen = loc.readUInt16LE(28);
-  const dataStart = entry.localHeaderOffset + 30 + nameLen + extraLen;
-  const raw = readAt(fd, dataStart, entry.compressedSize);
+  return entry.localHeaderOffset + 30 + loc.readUInt16LE(26) + loc.readUInt16LE(28);
+}
+
+// Read a single entry's bytes, decompressing STORE (0) and DEFLATE (8).
+function readEntryData(fd: number, entry: ZipEntry): Buffer {
+  const raw = readAt(fd, entryDataStart(fd, entry), entry.compressedSize);
   if (entry.method === 0) return raw;
   if (entry.method === 8) return zlib.inflateRawSync(raw);
   throw new Error(`Unsupported zip compression method ${entry.method}`);
@@ -169,6 +171,16 @@ export function openZip(path: string): ZipHandle {
       const e = byName.get(name);
       if (!e) throw new Error(`Entry not found in zip: ${name}`);
       return readEntryData(fd, e);
+    },
+    // Read a slice of one entry without materializing the whole thing. WACZ
+    // requires its WARCs be Stored, so this is a plain ranged file read --
+    // which is what makes pulling one record out of a huge archive cheap. The
+    // DEFLATE branch is only a correctness fallback for non-conforming files.
+    readRange: (name, offset, length) => {
+      const e = byName.get(name);
+      if (!e) throw new Error(`Entry not found in zip: ${name}`);
+      if (e.method !== 0) return readEntryData(fd, e).subarray(offset, offset + length);
+      return readAt(fd, entryDataStart(fd, e) + offset, length);
     },
     readMatching: (test) =>
       entries

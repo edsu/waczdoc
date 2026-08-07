@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { startServer } from "../dist/server.js";
 import { renderPages } from "../dist/render.js";
-import { listHtmlPages } from "../dist/wacz.js";
+import { listPages } from "../dist/wacz.js";
 import { FIXTURE_1, tmpDir } from "./helpers.js";
 
 // Full replay+print path through wabac in headless Chromium. Requires the
@@ -15,7 +15,7 @@ test(
   "renders a fixture page to a real PDF",
   { skip, timeout: 120000 },
   async () => {
-    const pages = listHtmlPages(FIXTURE_1);
+    const pages = listPages(FIXTURE_1).map((p, index) => ({ ...p, index }));
     const { dir, cleanup } = tmpDir();
     try {
       const server = await startServer(FIXTURE_1);
@@ -47,7 +47,7 @@ test(
   "an injected script runs without breaking the render",
   { skip, timeout: 120000 },
   async () => {
-    const pages = listHtmlPages(FIXTURE_1);
+    const pages = listPages(FIXTURE_1).map((p, index) => ({ ...p, index }));
     const { dir, cleanup } = tmpDir();
     try {
       const server = await startServer(FIXTURE_1);

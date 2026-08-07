@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { listHtmlPages } from "./wacz.js";
+import { listPages, pageKind, type PageJob, type PageResult } from "./wacz.js";
+import { extractPages } from "./extract.js";
 import { startServer } from "./server.js";
-import { renderPages, defaultConcurrency, type RenderOptions, type RenderResult } from "./render.js";
+import { renderPages, defaultConcurrency, type RenderOptions } from "./render.js";
 
 interface Args {
   out: string;
@@ -15,11 +16,16 @@ interface Args {
   help?: boolean;
   list?: boolean;
   limit?: number;
+  extract: boolean;
   input?: string;
 }
 
 function usage(): void {
-  console.log(`wacz-pdf - render HTML pages from a WACZ archive to PDF
+  console.log(`wacz-pdf - turn the pages of a WACZ archive into PDFs
+
+Pages come from the crawler's own page list (pages/*.jsonl), falling back to
+the CDX index. Archived PDFs are copied straight out of the archive; HTML
+pages are replayed in headless Chromium and printed.
 
 Usage:
   wacz-pdf <archive.wacz> [options]
@@ -31,8 +37,10 @@ Options:
       --single-page     One continuous page per article (no pagination)
   -j, --concurrency <n> Render n pages in parallel (default 1; "auto" = cores-2)
       --print-media     Use print CSS instead of screen CSS
-      --list            Only list the HTML pages found; do not render
-      --limit <n>       Render at most n pages
+      --list            Only list the pages found; do not write anything
+      --limit <n>       Process at most n pages
+      --no-extract      Replay archived PDFs in the browser instead of
+                        copying them out (rarely what you want)
       --exclude <re>    Skip pages whose URL matches this regex (repeatable)
       --include <re>    Keep only pages whose URL matches this regex (repeatable)
       --inject <js>     Run JS in each page before printing; use @file to read
@@ -56,6 +64,7 @@ function parseArgs(argv: string[]): Args {
     exclude: [],
     include: [],
     injects: [],
+    extract: true,
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -70,6 +79,7 @@ function parseArgs(argv: string[]): Args {
       args.opts.concurrency = v === "auto" ? defaultConcurrency() : parseInt(v ?? "", 10);
     } else if (a === "--print-media") args.opts.screenMedia = false;
     else if (a === "--list") args.list = true;
+    else if (a === "--no-extract") args.extract = false;
     else if (a === "--limit") args.limit = parseInt(argv[++i] ?? "", 10);
     else if (a === "--exclude") {
       const v = argv[++i];
@@ -126,9 +136,10 @@ async function main(): Promise<void> {
   });
   if (injectParts.length) args.opts.inject = injectParts.join("\n;\n");
 
-  console.error(`Reading CDX index from ${path.basename(args.input)} ...`);
-  let pages = listHtmlPages(args.input);
-  console.error(`Found ${pages.length} HTML page(s) in the archive.`);
+  console.error(`Reading page list from ${path.basename(args.input)} ...`);
+  let pages = listPages(args.input);
+  const via = pages[0]?.discoveredIn === "cdx" ? "CDX index" : "pages/*.jsonl";
+  console.error(`Found ${pages.length} page(s) in the archive (via ${via}).`);
 
   // Apply URL filters: keep pages matching any --include (if any given),
   // then drop pages matching any --exclude.
@@ -148,43 +159,77 @@ async function main(): Promise<void> {
 
   if (args.list) {
     for (const p of pages) {
-      console.log(`${p.timestamp}\t${p.url}${p.title ? `\t${p.title}` : ""}`);
+      console.log(
+        `${p.timestamp}\t${pageKind(p)}\t${p.url}${p.title ? `\t${p.title}` : ""}`
+      );
     }
     return;
   }
-  if (pages.length === 0) {
-    console.error("Nothing to render.");
+
+  // Index the whole run up front so output filenames stay in one sequence
+  // whichever pass writes them.
+  const jobs: PageJob[] = pages.map((p, index) => ({ ...p, index }));
+
+  // Archived PDFs are copied out as-is; HTML is replayed and printed. Anything
+  // else (Word documents, plain text, ...) is not something we can turn into a
+  // meaningful PDF, so it is reported and skipped.
+  const toExtract = args.extract
+    ? jobs.filter((j) => pageKind(j) === "pdf" && j.locator)
+    : [];
+  const extractable = new Set(toExtract);
+  const toRender = jobs.filter((j) => !extractable.has(j) && pageKind(j) !== "other");
+  const skipped = jobs.length - toExtract.length - toRender.length;
+  if (skipped) console.error(`Skipping ${skipped} page(s) that are neither HTML nor PDF.`);
+  if (toExtract.length + toRender.length === 0) {
+    console.error("Nothing to do.");
     return;
   }
 
-  const server = await startServer(args.input);
-  try {
-    const workers = Math.max(1, args.opts.concurrency || 1);
-    console.error(
-      `Rendering ${pages.length} page(s) to ${args.out}/ ` +
-        `(${workers} worker${workers > 1 ? "s" : ""}) ...`
-    );
-    const width = String(pages.length).length;
-    const results = await renderPages(pages, {
-      origin: server.origin,
-      outDir: args.out,
-      opts: args.opts,
-      // Print each page's outcome as it happens, so long runs show progress.
-      onProgress: (r: RenderResult) => {
-        const n = String(r.index + 1).padStart(width, " ");
-        if (r.ok) {
-          console.error(`  [${n}/${r.total}] ok    ${path.basename(r.file)}`);
-        } else {
-          console.error(`  [${n}/${r.total}] FAIL  ${r.url}  (${r.error})`);
-        }
-      },
-    });
-    const ok = results.filter((r) => r.ok);
-    const failed = results.filter((r) => !r.ok);
-    console.error(`\nDone: ${ok.length} rendered, ${failed.length} failed.`);
-  } finally {
-    await server.close();
+  const width = String(jobs.length).length;
+  const total = toExtract.length + toRender.length;
+  // Print each page's outcome as it happens, so long runs show progress.
+  const onProgress = (r: PageResult): void => {
+    const n = String(r.index + 1).padStart(width, " ");
+    const how = r.via === "extract" ? "copied" : "ok    ";
+    if (r.ok) console.error(`  [${n}/${total}] ${how} ${path.basename(r.file)}`);
+    else console.error(`  [${n}/${total}] FAIL   ${r.url}  (${r.error})`);
+  };
+
+  const results: PageResult[] = [];
+  if (toExtract.length) {
+    console.error(`Extracting ${toExtract.length} archived PDF(s) to ${args.out}/ ...`);
+    results.push(...extractPages(args.input, toExtract, { outDir: args.out, total, onProgress }));
   }
+
+  // The replay server and browser only start if there is HTML to print.
+  if (toRender.length) {
+    const server = await startServer(args.input);
+    try {
+      const workers = Math.max(1, args.opts.concurrency || 1);
+      console.error(
+        `Rendering ${toRender.length} page(s) to ${args.out}/ ` +
+          `(${workers} worker${workers > 1 ? "s" : ""}) ...`
+      );
+      results.push(
+        ...(await renderPages(toRender, {
+          origin: server.origin,
+          outDir: args.out,
+          opts: args.opts,
+          total,
+          onProgress,
+        }))
+      );
+    } finally {
+      await server.close();
+    }
+  }
+
+  const ok = results.filter((r) => r.ok);
+  const copied = ok.filter((r) => r.via === "extract").length;
+  const failed = results.length - ok.length;
+  console.error(
+    `\nDone: ${ok.length - copied} rendered, ${copied} copied, ${failed} failed.`
+  );
 }
 
 main().catch((err) => {
