@@ -33,6 +33,9 @@ export function urlToFilename(u: string, index: number): string {
     .replace(/^_+|_+$/g, "")
     .slice(0, 150);
   if (!name) name = "page";
+  // Archived PDFs are copied out under their own name, which already ends in
+  // .pdf -- don't give them a second one.
+  if (!/\.pdf$/i.test(name)) name += ".pdf";
   // Prefix with index to guarantee uniqueness and preserve ordering.
-  return `${String(index + 1).padStart(4, "0")}_${name}.pdf`;
+  return `${String(index + 1).padStart(4, "0")}_${name}`;
 }

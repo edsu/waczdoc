@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { urlToFilename } from "./util.js";
-import type { Page as WaczPage } from "./wacz.js";
+import type { PageJob, PageResult } from "./wacz.js";
 
 const COLL = "coll";
 const VIEWPORT_WIDTH = 1280;
@@ -23,13 +23,7 @@ export interface RenderOptions {
   inject?: string;
 }
 
-export interface RenderResult extends WaczPage {
-  file: string;
-  ok: boolean;
-  error?: string;
-  index: number;
-  total?: number;
-}
+export type RenderResult = PageResult;
 
 interface Cfg {
   outDir: string;
@@ -53,15 +47,10 @@ function replayUrl(origin: string, ts: string, url: string): string {
 
 // Render one page in the given tab and return a result record. Pure per-page
 // work — no shared state — so tabs can run these concurrently.
-async function renderOne(
-  page: Page,
-  origin: string,
-  p: WaczPage,
-  index: number,
-  cfg: Cfg
-): Promise<RenderResult> {
+async function renderOne(page: Page, origin: string, p: PageJob, cfg: Cfg): Promise<RenderResult> {
   const { outDir, timeout, settleMs, singlePage, pdfBase, inject } = cfg;
-  const file = path.join(outDir, urlToFilename(p.url, index));
+  const file = path.join(outDir, urlToFilename(p.url, p.index));
+  const base = { ...p, file, via: "render" as const };
   const target = replayUrl(origin, p.timestamp, p.url);
   try {
     // Point the iframe at the replay URL and wait for its load event OR the
@@ -99,7 +88,7 @@ async function renderOne(
           .catch(() => false)
       : true;
     if (notFound) {
-      return { ...p, file, ok: false, error: "not found in archive during replay", index };
+      return { ...base, ok: false, error: "not found in archive during replay" };
     }
 
     // Run the user's injection script inside the replayed page, before
@@ -146,10 +135,10 @@ async function renderOne(
         margin: { top: "0.4in", bottom: "0.4in", left: "0.4in", right: "0.4in" },
       });
     }
-    return { ...p, file, ok: true, index };
+    return { ...base, ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { ...p, file, ok: false, error: message, index };
+    return { ...base, ok: false, error: message };
   }
 }
 
@@ -171,12 +160,14 @@ export interface RenderArgs {
   origin: string;
   outDir: string;
   opts?: RenderOptions;
+  // Overall job count, for progress display across both passes.
+  total?: number;
   onProgress?: (r: RenderResult) => void;
 }
 
 export async function renderPages(
-  pages: WaczPage[],
-  { origin, outDir, opts = {}, onProgress }: RenderArgs
+  pages: PageJob[],
+  { origin, outDir, opts = {}, total, onProgress }: RenderArgs
 ): Promise<RenderResult[]> {
   const {
     format = "Letter",
@@ -237,8 +228,8 @@ export async function renderPages(
       for (;;) {
         const i = cursor++;
         if (i >= pages.length) return;
-        const r = await renderOne(page, origin, pages[i], i, cfg);
-        r.total = pages.length;
+        const r = await renderOne(page, origin, pages[i], cfg);
+        r.total = total ?? pages.length;
         results[i] = r;
         if (onProgress) onProgress(r);
       }

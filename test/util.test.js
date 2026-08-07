@@ -36,3 +36,14 @@ test("non-URL input still yields a safe filename", () => {
   const name = urlToFilename("not a url", 0);
   assert.match(name, /^0001_.*\.pdf$/);
 });
+
+test("a URL already ending in .pdf doesn't get a second extension", () => {
+  assert.equal(
+    urlToFilename("https://example.org/docs/report.pdf", 0),
+    "0001_example.org_docs_report.pdf"
+  );
+  assert.equal(
+    urlToFilename("https://example.org/docs/REPORT.PDF", 0),
+    "0001_example.org_docs_REPORT.PDF"
+  );
+});
