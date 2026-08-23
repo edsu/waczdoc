@@ -15,7 +15,7 @@ export const FIXTURE_2 = fixture("valid_example_2.wacz");
 
 // Create a throwaway output directory; returns { dir, cleanup }.
 export function tmpDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wacz-pdf-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "waczdoc-test-"));
   return { dir, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -71,7 +71,7 @@ export function writeStoredZip(files) {
   eocd.writeUInt32LE(cd.length, 12);
   eocd.writeUInt32LE(body.length, 16); // central directory offset
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wacz-pdf-zip-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "waczdoc-zip-"));
   const out = path.join(dir, "synthetic.wacz");
   fs.writeFileSync(out, Buffer.concat([body, cd, eocd]));
   return { path: out, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
@@ -105,7 +105,7 @@ export function waczWithoutPageList(src) {
     buf.write(HIDDEN_NAME, at, PAGES_NAME.length, "latin1");
     at += PAGES_NAME.length;
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wacz-pdf-nopages-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "waczdoc-nopages-"));
   const out = path.join(dir, "no-pages.wacz");
   fs.writeFileSync(out, buf);
   return { path: out, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };

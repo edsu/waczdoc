@@ -1,7 +1,7 @@
 // Reads one page's archived bytes out of a WACZ, following revisit records.
 //
-// Both output passes that skip the browser need this: --extract copies the
-// bytes straight to disk, --markdown parses them. The revisit chase is the
+// Both output passes that skip the browser need this: PDF extraction copies the
+// bytes straight to disk, Markdown parses them. The revisit chase is the
 // fiddly part -- a deduped capture stores no payload of its own -- so it lives
 // here once rather than in each caller.
 import { openZip, type ZipHandle } from "./zipread.js";

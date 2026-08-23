@@ -14,7 +14,7 @@ const SW_PATH = resolveWabacSw();
 const INDEX_HTML = `<!doctype html>
 <html>
 <head>
-<meta charset="utf-8"><title>wacz-pdf loader</title>
+<meta charset="utf-8"><title>waczdoc loader</title>
 <style>
   html, body { margin: 0; padding: 0; }
   /* Replay content lives in an iframe (wabac serves iframe requests as

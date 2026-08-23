@@ -1,11 +1,11 @@
 {
-  "name": "wacz-pdf",
-  "version": "1.1.0",
-  "description": "Render the HTML pages in a WACZ web archive to PDF, one per page, via wabac.js replay in headless Chromium -- or extract them as Markdown",
+  "name": "waczdoc",
+  "version": "2.0.0",
+  "description": "Turn the pages inside a WACZ web archive into documents: PDF via wabac.js replay in headless Chromium, or Markdown extracted straight from the archive",
   "main": "dist/cli.js",
   "scripts": {
     "test": "tsc && node --test",
-    "test:unit": "tsc && node --test test/range.test.js test/util.test.js test/zipread.test.js test/wacz.test.js test/markdown.test.js",
+    "test:unit": "tsc && node --test test/range.test.js test/util.test.js test/zipread.test.js test/wacz.test.js test/warc.test.js test/extract.test.js test/markdown.test.js test/cli.test.js",
     "build": "tsc",
     "prepublishOnly": "tsc",
     "lint": "eslint ."
@@ -29,12 +29,13 @@
   "type": "module",
   "dependencies": {
     "@webrecorder/wabac": "^2.26.6",
+    "commander": "^12.1.0",
     "defuddle": "0.19.2",
     "linkedom": "^0.18.13",
     "playwright": "^1.62.1"
   },
   "bin": {
-    "wacz-pdf": "dist/cli.js"
+    "waczdoc": "dist/cli.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -53,10 +54,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/edsu/wacz-pdf.git"
+    "url": "git+https://github.com/edsu/waczdoc.git"
   },
-  "homepage": "https://github.com/edsu/wacz-pdf#readme",
+  "homepage": "https://github.com/edsu/waczdoc#readme",
   "bugs": {
-    "url": "https://github.com/edsu/wacz-pdf/issues"
+    "url": "https://github.com/edsu/waczdoc/issues"
   }
 }

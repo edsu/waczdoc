@@ -1,8 +1,17 @@
-# wacz-pdf
+# waczdoc
 
 Turn the pages inside a [WACZ](https://specs.webrecorder.net/wacz/1.1.1/)
-web archive into PDF files, one PDF per page — or into Markdown with
-`--markdown`.
+web archive into documents — one per page, as PDF or Markdown.
+
+```sh
+waczdoc pdf       archive.wacz -o pdfs
+waczdoc markdown  archive.wacz -o markdown
+waczdoc list      archive.wacz
+```
+
+Markdown is the gateway to everything else: pipe it through
+[pandoc](https://pandoc.org) for EPUB, DOCX, LaTeX, ODT or typeset PDF. See
+[Converting further with pandoc](#converting-further-with-pandoc).
 
 Pages come from the crawler's own page list (`pages/pages.jsonl` and
 `pages/extraPages.jsonl`), falling back to the **CDX index** for archives
@@ -22,15 +31,16 @@ That second path is not a niche case. In one government-site crawl, 758 of the
 925 pages were PDFs: they extract in well under a second, against minutes of
 Chromium time for a far worse result.
 
-With `--markdown`, HTML pages take a third path: their archived bytes are read
+`waczdoc markdown` gives HTML pages a third path: their archived bytes are read
 straight out of the WARC and the article is extracted with
 [defuddle](https://github.com/kepano/defuddle). No replay, no browser — see
 [Markdown output](#markdown-output).
 
 ## Install
 
-Rendering uses Playwright's Chromium, so download it once (a one-time
-~150 MB fetch into Playwright's shared cache):
+The `pdf` command uses Playwright's Chromium, so download it once (a one-time
+~150 MB fetch into Playwright's shared cache). `markdown` and `list` need no
+browser, so you can skip this if PDF isn't what you're after:
 
 ```sh
 npx playwright install chromium
@@ -39,57 +49,70 @@ npx playwright install chromium
 Then either run without installing:
 
 ```sh
-npx wacz-pdf archive.wacz -o pdfs
+npx waczdoc markdown archive.wacz
 ```
 
-or install globally for a `wacz-pdf` command on your PATH:
+or install globally for a `waczdoc` command on your PATH:
 
 ```sh
-npm install -g wacz-pdf
-wacz-pdf archive.wacz -o pdfs
+npm install -g waczdoc
+waczdoc markdown archive.wacz
 ```
 
 Requires Node.js 18+.
 
 ## Usage
 
+Each output format is its own subcommand, so `waczdoc <command> --help` shows
+only the options that apply to it:
+
 ```sh
 # Turn every page in the archive into a PDF under ./pdfs/
-wacz-pdf archive.wacz -o pdfs
+waczdoc pdf archive.wacz
+
+# Extract each page's article as Markdown under ./markdown/ (no browser)
+waczdoc markdown archive.wacz
 
 # Just list the pages found, with what each one is (no output written)
-wacz-pdf archive.wacz --list
+waczdoc list archive.wacz
 
 # Only the archived PDFs, extracted without starting a browser
-wacz-pdf archive.wacz -o pdfs --include '\.pdf$'
+waczdoc pdf archive.wacz --include '\.pdf$'
 
 # A4, landscape, print stylesheet, first 10 pages only
-wacz-pdf archive.wacz -o pdfs --format A4 --landscape --print-media --limit 10
-
-# Markdown instead of PDF, no browser needed
-wacz-pdf archive.wacz --markdown -o markdown
+waczdoc pdf archive.wacz --format A4 --landscape --print-media --limit 10
 ```
 
-(With `npx`, prefix each command with `npx `, e.g. `npx wacz-pdf archive.wacz --list`.)
+(With `npx`, prefix each command with `npx `, e.g. `npx waczdoc list archive.wacz`.)
 
 ### Options
 
+Shared by every subcommand:
+
 | Flag | Description |
 | --- | --- |
-| `-o, --out <dir>` | Output directory (default `pdfs`, or `markdown` with `--markdown`) |
-| `--markdown` | Write Markdown instead of PDF for HTML pages; no browser used |
-| `--no-front-matter` | Omit the YAML front matter from `--markdown` output |
+| `-o, --out <dir>` | Output directory (default `pdfs` / `markdown` per subcommand) |
+| `--include <re>` | Keep only pages whose URL matches this regex (repeatable) |
+| `--exclude <re>` | Skip pages whose URL matches this regex (repeatable) |
+| `--limit <n>` | Process at most `n` pages |
+
+`waczdoc pdf` only:
+
+| Flag | Description |
+| --- | --- |
 | `--format <name>` | Paper size: `Letter`, `A4`, `Legal`, … (default `Letter`) |
 | `--landscape` | Landscape orientation |
 | `--single-page` | One continuous page per article, sized to content (no pagination) |
 | `-j, --concurrency <n>` | Render `n` pages in parallel (default `1`; `auto` = cores − 2) |
 | `--print-media` | Use print CSS instead of screen CSS (screen is the default) |
-| `--include <re>` | Keep only pages whose URL matches this regex (repeatable) |
-| `--exclude <re>` | Skip pages whose URL matches this regex (repeatable) |
-| `--list` | List the pages found (timestamp, kind, URL, title), write nothing |
-| `--limit <n>` | Process at most `n` pages |
-| `--no-extract` | Replay archived PDFs in the browser instead of copying them out (rarely what you want) |
 | `--inject <js>` | Run JS in each page before printing; `@file` reads from a file (repeatable) |
+| `--no-extract` | Replay archived PDFs in the browser instead of copying them out (rarely what you want) |
+
+`waczdoc markdown` only:
+
+| Flag | Description |
+| --- | --- |
+| `--no-front-matter` | Omit the YAML front matter |
 
 URL filters use JavaScript regex syntax, matched case-insensitively against the
 full URL. `--include` is applied before `--exclude`. Example: only article
@@ -104,10 +127,14 @@ WACZ ─► read page list + CDX                             src/wacz.ts
                 headless Chromium + wabac service worker
                 └─ replay in an <iframe> ─► page.pdf()   src/render.ts
 
-     with --markdown:
+     waczdoc markdown:
      └─ HTML ─► bytes out of the WARC ─► linkedom        src/markdown.ts
                 └─ defuddle ─► article as Markdown
 ```
+
+Argument parsing turns argv into a single `Plan` object and does nothing else
+(`src/cli.ts`), so the whole command surface is testable without touching an
+archive or starting a browser.
 
 The two passes share one output sequence, so filenames stay in page order no
 matter which pass wrote them. The replay server and browser only start if there
@@ -176,12 +203,12 @@ replayed page, after it loads but before it's printed, so you can clean it up:
 
 ```sh
 # inline
-wacz-pdf archive.wacz --inject \
+waczdoc pdf archive.wacz --inject \
   "document.querySelectorAll('.modal,[role=dialog]').forEach(e=>e.remove());\
    document.documentElement.style.overflow='auto'"
 
 # or from a file (repeatable), e.g. a reusable cleanup.js
-wacz-pdf archive.wacz --inject @cleanup.js
+waczdoc pdf archive.wacz --inject @cleanup.js
 ```
 
 See `examples/dismiss-modal.js` for a starting-point script that removes a
@@ -197,10 +224,10 @@ Notes:
 
 ## Markdown output
 
-`--markdown` writes one Markdown file per HTML page instead of a PDF:
+`waczdoc markdown` writes one Markdown file per HTML page:
 
 ```sh
-wacz-pdf archive.wacz --markdown -o markdown
+waczdoc markdown archive.wacz -o markdown
 ```
 
 The archived HTML is read straight out of the WARC — the same ranged read used
@@ -251,15 +278,39 @@ The tradeoff is that this sees only what the server sent:
   thousands of words of mojibake. Byte signatures are checked first and those
   pages fail with `not HTML: looks like …`.
 
-Archived PDFs are still copied out as-is, so `--markdown` output directories can
-contain `.pdf` files too. `--no-extract` has no effect with `--markdown`.
+Archived PDFs are still copied out as-is, so a `markdown` output directory can
+contain `.pdf` files too.
+
+## Converting further with pandoc
+
+Markdown is a means, not an end. [pandoc](https://pandoc.org) reads a
+`---`-delimited YAML block at the top of a Markdown file as document metadata,
+which is exactly what `waczdoc markdown` writes — so `title:` and `author:`
+flow into pandoc's templates with no massaging:
+
+```sh
+waczdoc markdown archive.wacz -o markdown
+
+# one article, several ways
+pandoc markdown/0197_example.com_acting-my-age.md -o article.epub
+pandoc markdown/0197_example.com_acting-my-age.md -o article.docx
+pandoc markdown/0197_example.com_acting-my-age.md -o article.pdf   # via LaTeX
+
+# or bind a whole crawl into one book
+pandoc markdown/*.md --toc -o archive.epub
+```
+
+That last one is the reason this tool stopped being called `wacz-pdf`: once the
+pages are Markdown, EPUB, ODT, LaTeX, MediaWiki, JATS and typeset PDF are all
+one command away, and the LaTeX route generally sets better type than a browser
+print dialog ever will.
 
 ## Development
 
 The source is TypeScript under `src/`, compiled to `dist/` with `tsc`.
 
 ```sh
-git clone <repo> && cd wacz-pdf
+git clone <repo> && cd waczdoc
 npm install
 npx playwright install chromium
 
@@ -269,11 +320,11 @@ npm test          # build, then unit + end-to-end (renders a fixture to PDF)
 npm run test:unit # build, then unit only (no browser needed)
 ```
 
-Run the local build with `node dist/cli.js <archive.wacz> …` (or `npm link`
-once for a global `wacz-pdf` that points at your working copy).
+Run the local build with `node dist/cli.js <command> <archive.wacz> …` (or
+`npm link` once for a global `waczdoc` that points at your working copy).
 
 The end-to-end test needs the Playwright Chromium browser
-(`npx playwright install chromium`); set `WACZ_PDF_SKIP_E2E=1` to skip it.
+(`npx playwright install chromium`); set `WACZDOC_SKIP_E2E=1` to skip it.
 CI (GitHub Actions) runs lint, build, and the full test suite on push and PRs.
 
 ## Performance
@@ -307,7 +358,7 @@ into 172 files, against 5 for linkedom.
 ## Known limitations
 
 - JS-heavy / SPA pages may render partially if not all their requests were
-  captured, and yield no article at all under `--markdown`.
+  captured, and yield no article at all under `waczdoc markdown`.
 - Pages captured multiple times are deduplicated to the most recent capture.
 - Pages that are neither HTML nor PDF (Word documents, plain text, …) are
   reported and skipped.
