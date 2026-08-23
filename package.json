@@ -1,11 +1,11 @@
 {
   "name": "wacz-pdf",
   "version": "1.1.0",
-  "description": "Render the HTML pages in a WACZ web archive to PDF, one per page, via wabac.js replay in headless Chromium",
+  "description": "Render the HTML pages in a WACZ web archive to PDF, one per page, via wabac.js replay in headless Chromium -- or extract them as Markdown",
   "main": "dist/cli.js",
   "scripts": {
     "test": "tsc && node --test",
-    "test:unit": "tsc && node --test test/range.test.js test/util.test.js test/zipread.test.js test/wacz.test.js",
+    "test:unit": "tsc && node --test test/range.test.js test/util.test.js test/zipread.test.js test/wacz.test.js test/markdown.test.js",
     "build": "tsc",
     "prepublishOnly": "tsc",
     "lint": "eslint ."
@@ -20,13 +20,17 @@
     "playwright",
     "archiving",
     "replay",
-    "cdx"
+    "cdx",
+    "markdown",
+    "defuddle"
   ],
   "author": "ehs@pobox.com",
   "license": "MIT",
   "type": "module",
   "dependencies": {
     "@webrecorder/wabac": "^2.26.6",
+    "defuddle": "0.19.2",
+    "linkedom": "^0.18.13",
     "playwright": "^1.62.1"
   },
   "bin": {

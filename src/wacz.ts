@@ -38,8 +38,9 @@ export interface PageResult extends PageJob {
   ok: boolean;
   error?: string;
   total?: number;
-  // How the file was produced: replayed in a browser, or copied out of a WARC.
-  via: "render" | "extract";
+  // How the file was produced: replayed in a browser, copied out of a WARC, or
+  // parsed out of archived HTML.
+  via: "render" | "extract" | "markdown";
 }
 
 export interface CdxRecord {

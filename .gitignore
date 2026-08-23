@@ -6,6 +6,8 @@ out/
 out2/
 pdfs/
 *.pdf
+markdown/
+*-markdown/
 
 # local editor/agent settings
 .claude/settings.local.json

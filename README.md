@@ -1,7 +1,8 @@
 # wacz-pdf
 
 Turn the pages inside a [WACZ](https://specs.webrecorder.net/wacz/1.1.1/)
-web archive into PDF files, one PDF per page.
+web archive into PDF files, one PDF per page — or into Markdown with
+`--markdown`.
 
 Pages come from the crawler's own page list (`pages/pages.jsonl` and
 `pages/extraPages.jsonl`), falling back to the **CDX index** for archives
@@ -20,6 +21,11 @@ written without one. Each page is then handled according to what it is:
 That second path is not a niche case. In one government-site crawl, 758 of the
 925 pages were PDFs: they extract in well under a second, against minutes of
 Chromium time for a far worse result.
+
+With `--markdown`, HTML pages take a third path: their archived bytes are read
+straight out of the WARC and the article is extracted with
+[defuddle](https://github.com/kepano/defuddle). No replay, no browser — see
+[Markdown output](#markdown-output).
 
 ## Install
 
@@ -59,6 +65,9 @@ wacz-pdf archive.wacz -o pdfs --include '\.pdf$'
 
 # A4, landscape, print stylesheet, first 10 pages only
 wacz-pdf archive.wacz -o pdfs --format A4 --landscape --print-media --limit 10
+
+# Markdown instead of PDF, no browser needed
+wacz-pdf archive.wacz --markdown -o markdown
 ```
 
 (With `npx`, prefix each command with `npx `, e.g. `npx wacz-pdf archive.wacz --list`.)
@@ -67,7 +76,9 @@ wacz-pdf archive.wacz -o pdfs --format A4 --landscape --print-media --limit 10
 
 | Flag | Description |
 | --- | --- |
-| `-o, --out <dir>` | Output directory (default `pdfs`) |
+| `-o, --out <dir>` | Output directory (default `pdfs`, or `markdown` with `--markdown`) |
+| `--markdown` | Write Markdown instead of PDF for HTML pages; no browser used |
+| `--no-front-matter` | Omit the YAML front matter from `--markdown` output |
 | `--format <name>` | Paper size: `Letter`, `A4`, `Legal`, … (default `Letter`) |
 | `--landscape` | Landscape orientation |
 | `--single-page` | One continuous page per article, sized to content (no pagination) |
@@ -88,10 +99,14 @@ pages, minus tag listings: `--include '/\\d{4}/' --exclude '/tag/'`.
 
 ```
 WACZ ─► read page list + CDX                             src/wacz.ts
-     ├─ PDF  ─► copy bytes out of the WARC ─► file       src/extract.ts, src/warc.ts
+     ├─ PDF  ─► copy bytes out of the WARC ─► file       src/extract.ts, src/payload.ts
      └─ HTML ─► serve sw.js + WACZ (HTTP Range)          src/server.ts
                 headless Chromium + wabac service worker
                 └─ replay in an <iframe> ─► page.pdf()   src/render.ts
+
+     with --markdown:
+     └─ HTML ─► bytes out of the WARC ─► linkedom        src/markdown.ts
+                └─ defuddle ─► article as Markdown
 ```
 
 The two passes share one output sequence, so filenames stay in page order no
@@ -180,6 +195,65 @@ Notes:
 - It's best-effort: a script that throws logs nothing and does not fail the
   page's render, so write defensively (e.g. optional chaining).
 
+## Markdown output
+
+`--markdown` writes one Markdown file per HTML page instead of a PDF:
+
+```sh
+wacz-pdf archive.wacz --markdown -o markdown
+```
+
+The archived HTML is read straight out of the WARC — the same ranged read used
+to extract PDFs — parsed with [linkedom](https://github.com/WebReflection/linkedom), and
+handed to [defuddle](https://github.com/kepano/defuddle), which picks the
+article out of the surrounding navigation and converts it to Markdown. Each
+file gets YAML front matter from the page's metadata and the capture record:
+
+```markdown
+---
+title: "What Was the Nerd?"
+url: "https://reallifemag.com/what-was-the-nerd/"
+archived: "2023-01-05T20:20:31Z"
+author: "Vicky Osterweil"
+published: "2016-11-16T00:00:00+00:00"
+description: "The myth of the bullied white outcast loner is helping fuel a fascist resurgence"
+site: "Real Life"
+words: 3531
+---
+
+Fascism is back. Nazi propaganda is appearing [on college campuses](…)
+```
+
+Use `--no-front-matter` for bare content.
+
+No browser is involved on this path, which makes it fast: an 854-page magazine
+crawl converts in 19 seconds, and a 761-page news crawl in 148 seconds, both
+single-threaded. Links and image URLs are the ones the crawler saw, because
+nothing goes through replay's URL rewriting.
+
+The character encoding comes from the server's own `Content-Type`, falling back
+to a `<meta charset>` and then to UTF-8. Reading the archive directly is the
+only way to see that header — a browser replaying the page is the only other
+thing that ever does.
+
+The tradeoff is that this sees only what the server sent:
+
+- **A page that builds its content in JavaScript has nothing to extract.** It
+  archives and replays fine, but its HTML is an empty shell, so it is reported
+  as `no article content found`. Render those to PDF instead.
+- **Index and listing pages have no article.** A homepage or `/tag/` listing
+  yields a near-empty file rather than an error — check `words` in the front
+  matter, or filter them out with `--exclude`.
+- **Non-article formats are refused, not converted.** Archives whose page list
+  records no mime type are assumed to be HTML (see
+  [Where the page list comes from](#where-the-page-list-comes-from)), so a
+  binary file can reach the parser, which will happily turn an EPUB into
+  thousands of words of mojibake. Byte signatures are checked first and those
+  pages fail with `not HTML: looks like …`.
+
+Archived PDFs are still copied out as-is, so `--markdown` output directories can
+contain `.pdf` files too. `--no-extract` has no effect with `--markdown`.
+
 ## Development
 
 The source is TypeScript under `src/`, compiled to `dist/` with `tsc`.
@@ -217,10 +291,23 @@ archive's index is loaded only once no matter how many workers you use. The
 trade-off at high concurrency is memory: N tabs accumulate N× the renderer
 state over a long run.
 
+Markdown conversion sits between the two: no browser, but each page still has
+to be parsed into a DOM. Measured at 46 pages/second on one core for the
+magazine crawl and 5 pages/second for a heavier news site, so it is dominated
+by page size rather than by page count.
+
+`linkedom` rather than `jsdom` for the DOM, for two measured reasons. jsdom
+retained roughly 20 MB per parsed page — enough to exhaust a default heap part
+way through a 761-page archive — where linkedom stays flat. And because jsdom
+implements the layout API without a layout engine, every element reports zero
+size and defuddle's visibility heuristics prune content that is really there:
+across 838 articles, jsdom dropped subtitles and leaked raw `<audio>` markup
+into 172 files, against 5 for linkedom.
+
 ## Known limitations
 
 - JS-heavy / SPA pages may render partially if not all their requests were
-  captured.
+  captured, and yield no article at all under `--markdown`.
 - Pages captured multiple times are deduplicated to the most recent capture.
 - Pages that are neither HTML nor PDF (Word documents, plain text, …) are
   reported and skipped.

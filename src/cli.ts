@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { listPages, pageKind, type PageJob, type PageResult } from "./wacz.js";
 import { extractPages } from "./extract.js";
+import { markdownPages } from "./markdown.js";
 import { startServer } from "./server.js";
 import { renderPages, defaultConcurrency, type RenderOptions } from "./render.js";
 
@@ -17,21 +18,30 @@ interface Args {
   list?: boolean;
   limit?: number;
   extract: boolean;
+  markdown: boolean;
+  frontMatter: boolean;
   input?: string;
 }
 
 function usage(): void {
-  console.log(`wacz-pdf - turn the pages of a WACZ archive into PDFs
+  console.log(`wacz-pdf - turn the pages of a WACZ archive into PDFs or Markdown
 
 Pages come from the crawler's own page list (pages/*.jsonl), falling back to
 the CDX index. Archived PDFs are copied straight out of the archive; HTML
 pages are replayed in headless Chromium and printed.
 
+With --markdown, HTML pages are instead read straight out of the archive and
+converted to Markdown, with no browser involved at all.
+
 Usage:
   wacz-pdf <archive.wacz> [options]
 
 Options:
-  -o, --out <dir>       Output directory (default: ./pdfs)
+  -o, --out <dir>       Output directory (default: ./pdfs, or ./markdown
+                        with --markdown)
+      --markdown        Write Markdown instead of PDF for HTML pages (no
+                        browser; archived PDFs are still copied out as-is)
+      --no-front-matter Omit the YAML front matter from --markdown output
       --format <name>   Paper format: Letter, A4, Legal, ... (default: Letter)
       --landscape       Landscape orientation
       --single-page     One continuous page per article (no pagination)
@@ -53,24 +63,33 @@ Example: --exclude '\\.(png|jpe?g|gif)$' --include '/news/'
 Injection runs inside the replayed page after it loads. Example: dismiss a
 sign-in overlay and unlock scrolling --
   --inject "document.querySelectorAll('.modal,[role=dialog]').forEach(e=>e.remove());document.documentElement.style.overflow='auto'"
+
+--markdown reads the HTML the server originally sent, so a page that builds
+its content in JavaScript has nothing to extract and is reported as such.
+Render those to PDF instead. --inject, --format, --landscape, --single-page
+and --concurrency apply to PDF rendering only.
 `);
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    out: "pdfs",
+    out: "",
     format: "Letter",
     opts: {},
     exclude: [],
     include: [],
     injects: [],
     extract: true,
+    markdown: false,
+    frontMatter: true,
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") args.help = true;
     else if (a === "-o" || a === "--out") args.out = argv[++i] ?? args.out;
+    else if (a === "--markdown") args.markdown = true;
+    else if (a === "--no-front-matter") args.frontMatter = false;
     else if (a === "--format") args.format = argv[++i] ?? args.format;
     else if (a === "--landscape") args.opts.landscape = true;
     else if (a === "--single-page") args.opts.singlePage = true;
@@ -94,6 +113,8 @@ function parseArgs(argv: string[]): Args {
   }
   args.input = rest[0];
   args.opts.format = args.format;
+  // Default output directory follows the output kind, unless -o said otherwise.
+  if (!args.out) args.out = args.markdown ? "markdown" : "pdfs";
   return args;
 }
 
@@ -170,28 +191,40 @@ async function main(): Promise<void> {
   // whichever pass writes them.
   const jobs: PageJob[] = pages.map((p, index) => ({ ...p, index }));
 
-  // Archived PDFs are copied out as-is; HTML is replayed and printed. Anything
-  // else (Word documents, plain text, ...) is not something we can turn into a
-  // meaningful PDF, so it is reported and skipped.
+  // Sending an archived PDF through the Markdown parser makes no sense, so in
+  // Markdown mode they are always copied out and --no-extract does nothing.
+  if (args.markdown && !args.extract) {
+    console.error("Note: --no-extract has no effect with --markdown; archived PDFs are copied.");
+    args.extract = true;
+  }
+
+  // Archived PDFs are copied out as-is; HTML is replayed and printed, or (with
+  // --markdown) read out of the archive and converted. Anything else (Word
+  // documents, plain text, ...) is not something we can turn into a meaningful
+  // PDF or article, so it is reported and skipped.
   const toExtract = args.extract
     ? jobs.filter((j) => pageKind(j) === "pdf" && j.locator)
     : [];
   const extractable = new Set(toExtract);
-  const toRender = jobs.filter((j) => !extractable.has(j) && pageKind(j) !== "other");
-  const skipped = jobs.length - toExtract.length - toRender.length;
+  const toConvert = jobs.filter((j) => !extractable.has(j) && pageKind(j) !== "other");
+  const skipped = jobs.length - toExtract.length - toConvert.length;
   if (skipped) console.error(`Skipping ${skipped} page(s) that are neither HTML nor PDF.`);
-  if (toExtract.length + toRender.length === 0) {
+  if (toExtract.length + toConvert.length === 0) {
     console.error("Nothing to do.");
     return;
   }
 
-  const width = String(jobs.length).length;
-  const total = toExtract.length + toRender.length;
-  // Print each page's outcome as it happens, so long runs show progress.
+  const total = toExtract.length + toConvert.length;
+  const width = String(total).length;
+  const LABEL = { extract: "copied", render: "ok    ", markdown: "wrote " };
+  // Print each page's outcome as it happens, so long runs show progress. This
+  // counts pages finished, not each page's index in the archive's page list --
+  // those differ whenever a page was skipped, and the index would then run past
+  // the total. The output filename still carries the index.
+  let done = 0;
   const onProgress = (r: PageResult): void => {
-    const n = String(r.index + 1).padStart(width, " ");
-    const how = r.via === "extract" ? "copied" : "ok    ";
-    if (r.ok) console.error(`  [${n}/${total}] ${how} ${path.basename(r.file)}`);
+    const n = String(++done).padStart(width, " ");
+    if (r.ok) console.error(`  [${n}/${total}] ${LABEL[r.via]} ${path.basename(r.file)}`);
     else console.error(`  [${n}/${total}] FAIL   ${r.url}  (${r.error})`);
   };
 
@@ -201,17 +234,28 @@ async function main(): Promise<void> {
     results.push(...extractPages(args.input, toExtract, { outDir: args.out, total, onProgress }));
   }
 
-  // The replay server and browser only start if there is HTML to print.
-  if (toRender.length) {
+  if (toConvert.length && args.markdown) {
+    // No replay server and no browser on this path -- just ranged reads.
+    console.error(`Converting ${toConvert.length} page(s) to Markdown in ${args.out}/ ...`);
+    results.push(
+      ...(await markdownPages(args.input, toConvert, {
+        outDir: args.out,
+        total,
+        onProgress,
+        frontMatter: args.frontMatter,
+      }))
+    );
+  } else if (toConvert.length) {
+    // The replay server and browser only start if there is HTML to print.
     const server = await startServer(args.input);
     try {
       const workers = Math.max(1, args.opts.concurrency || 1);
       console.error(
-        `Rendering ${toRender.length} page(s) to ${args.out}/ ` +
+        `Rendering ${toConvert.length} page(s) to ${args.out}/ ` +
           `(${workers} worker${workers > 1 ? "s" : ""}) ...`
       );
       results.push(
-        ...(await renderPages(toRender, {
+        ...(await renderPages(toConvert, {
           origin: server.origin,
           outDir: args.out,
           opts: args.opts,
@@ -228,7 +272,8 @@ async function main(): Promise<void> {
   const copied = ok.filter((r) => r.via === "extract").length;
   const failed = results.length - ok.length;
   console.error(
-    `\nDone: ${ok.length - copied} rendered, ${copied} copied, ${failed} failed.`
+    `\nDone: ${ok.length - copied} ${args.markdown ? "converted" : "rendered"}, ` +
+      `${copied} copied, ${failed} failed.`
   );
 }
 

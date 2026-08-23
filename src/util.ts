@@ -15,8 +15,8 @@ export function resolveWabacSw(): string {
   return path.join(path.dirname(main), "sw.js");
 }
 
-// Turn a URL into a safe-ish filename for the output PDF.
-export function urlToFilename(u: string, index: number): string {
+// Turn a URL into a safe-ish filename for the output file.
+export function urlToFilename(u: string, index: number, ext = "pdf"): string {
   let name: string;
   try {
     const parsed = new URL(u);
@@ -35,7 +35,8 @@ export function urlToFilename(u: string, index: number): string {
   if (!name) name = "page";
   // Archived PDFs are copied out under their own name, which already ends in
   // .pdf -- don't give them a second one.
-  if (!/\.pdf$/i.test(name)) name += ".pdf";
+  const suffix = `.${ext}`;
+  if (!name.toLowerCase().endsWith(suffix.toLowerCase())) name += suffix;
   // Prefix with index to guarantee uniqueness and preserve ordering.
   return `${String(index + 1).padStart(4, "0")}_${name}`;
 }
