@@ -1,13 +1,14 @@
 # dependencies
 node_modules/
 
-# render output
+# output directories. -o takes an arbitrary name, so these patterns only cover
+# the conventional ones -- check `git status` before adding.
 out/
 out2/
 pdfs/
 *.pdf
 markdown/
-*-markdown/
+*markdown*/
 
 # local editor/agent settings
 .claude/settings.local.json

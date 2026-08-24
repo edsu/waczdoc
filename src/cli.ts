@@ -4,7 +4,7 @@ import path from "node:path";
 import { Command, CommanderError } from "commander";
 import { listPages, pageKind, type PageJob, type PageResult } from "./wacz.js";
 import { extractPages } from "./extract.js";
-import { markdownPages } from "./markdown.js";
+import { markdownPages, type MarkdownOptions } from "./markdown.js";
 import { startServer } from "./server.js";
 import { renderPages, defaultConcurrency, type RenderOptions } from "./render.js";
 
@@ -35,7 +35,7 @@ export type Plan =
       input: string;
       out: string;
       filters: Filters;
-      frontMatter: boolean;
+      markdown: MarkdownOptions;
     };
 
 const FILTER_HELP = `
@@ -75,6 +75,30 @@ function filtersFrom(opts: { include: string[]; exclude: string[]; limit?: numbe
   return { include: opts.include, exclude: opts.exclude, limit: opts.limit };
 }
 
+// Options belonging to the replay pass, which both outputs go through.
+function withReplayOptions(cmd: Command): Command {
+  return cmd
+    .option(
+      "-j, --concurrency <n>",
+      'replay n pages in parallel ("auto" = cores-2)',
+      concurrency,
+      1
+    )
+    .option(
+      "--inject <js>",
+      "run JS in each page before capturing; @file reads from a file (repeatable)",
+      collect,
+      []
+    );
+}
+
+const INJECT_HELP = `
+Injection runs inside the replayed page after it loads, via Playwright's
+evaluation channel, so it works even under a restrictive Content-Security-Policy.
+It is best-effort: a script that throws does not fail the page. Example, dismiss
+a sign-in overlay and unlock scrolling:
+  --inject "document.querySelectorAll('.modal,[role=dialog]').forEach(e=>e.remove());document.documentElement.style.overflow='auto'"`;
+
 function buildProgram(onPlan: (plan: Plan) => void, silent: boolean): Command {
   const program = new Command();
   // Both of these have to be set before the subcommands are created: commander
@@ -92,38 +116,22 @@ function buildProgram(onPlan: (plan: Plan) => void, silent: boolean): Command {
     .showHelpAfterError();
 
   withFilters(
-    program
-      .command("pdf")
-      .description("render each page to PDF (replays HTML in headless Chromium)")
-      .argument("<archive.wacz>", "the archive to read")
-      .option("-o, --out <dir>", "output directory", "pdfs")
-      .option("--format <name>", "paper size: Letter, A4, Legal, ...", "Letter")
-      .option("--landscape", "landscape orientation")
-      .option("--single-page", "one continuous page per article, sized to content")
-      .option("-j, --concurrency <n>", 'render n pages in parallel ("auto" = cores-2)', concurrency, 1)
-      .option("--print-media", "use print CSS instead of screen CSS")
-      .option(
-        "--inject <js>",
-        "run JS in each page before printing; @file reads from a file (repeatable)",
-        collect,
-        []
-      )
-      .option(
-        "--no-extract",
-        "replay archived PDFs in the browser instead of copying them out (rarely what you want)"
-      )
-  )
-    .addHelpText(
-      "after",
-      `${FILTER_HELP}
-
-Injection runs inside the replayed page after it loads, via Playwright's
-evaluation channel, so it works even under a restrictive Content-Security-Policy.
-It is best-effort: a script that throws does not fail the page. Example, dismiss
-a sign-in overlay and unlock scrolling:
-  --inject "document.querySelectorAll('.modal,[role=dialog]').forEach(e=>e.remove());document.documentElement.style.overflow='auto'"
-`
+    withReplayOptions(
+      program
+        .command("pdf")
+        .description("render each page to PDF")
+        .argument("<archive.wacz>", "the archive to read")
+        .option("-o, --out <dir>", "output directory", "pdfs")
+        .option("--format <name>", "paper size: Letter, A4, Legal, ...", "Letter")
+        .option("--landscape", "landscape orientation")
+        .option("--single-page", "one continuous page per article, sized to content")
+        .option("--print-media", "use print CSS instead of screen CSS")
+    ).option(
+      "--no-extract",
+      "replay archived PDFs in the browser instead of copying them out (rarely what you want)"
     )
+  )
+    .addHelpText("after", `${FILTER_HELP}\n${INJECT_HELP}\n`)
     .action((archive: string, opts) => {
       onPlan({
         mode: "pdf",
@@ -143,20 +151,24 @@ a sign-in overlay and unlock scrolling:
     });
 
   withFilters(
-    program
-      .command("markdown")
-      .description("extract each page's article as Markdown (no browser)")
-      .argument("<archive.wacz>", "the archive to read")
-      .option("-o, --out <dir>", "output directory", "markdown")
-      .option("--no-front-matter", "omit the YAML front matter")
+    withReplayOptions(
+      program
+        .command("markdown")
+        .description("extract each page's article as Markdown")
+        .argument("<archive.wacz>", "the archive to read")
+        .option("-o, --out <dir>", "output directory", "markdown")
+        .option("--no-front-matter", "omit the YAML front matter")
+    )
   )
     .addHelpText(
       "after",
       `${FILTER_HELP}
+${INJECT_HELP}
 
-This reads the HTML the server originally sent, so a page that builds its
-content in JavaScript has nothing to extract and is reported as such -- render
-those to PDF instead. Archived PDFs are copied out as-is either way.
+Pages are replayed in headless Chromium and their rendered DOM is read, so a
+page that assembles its content in JavaScript is extracted correctly -- and
+--inject can dismiss a paywall or sign-in overlay first. Archived PDFs are
+copied out as-is rather than converted.
 `
     )
     .action((archive: string, opts) => {
@@ -165,7 +177,11 @@ those to PDF instead. Archived PDFs are copied out as-is either way.
         input: archive,
         out: opts.out,
         filters: filtersFrom(opts),
-        frontMatter: opts.frontMatter,
+        markdown: {
+          frontMatter: opts.frontMatter,
+          concurrency: opts.concurrency,
+          inject: resolveInjects(opts.inject),
+        },
       });
     });
 
@@ -318,46 +334,29 @@ async function run(plan: Plan): Promise<void> {
     results.push(...extractPages(plan.input, toExtract, { outDir: plan.out, total, onProgress }));
   }
 
-  if (plan.mode === "markdown") {
-    if (toConvert.length) {
-      // No replay server and no browser on this path -- just ranged reads.
-      console.error(`Converting ${toConvert.length} page(s) to Markdown in ${plan.out}/ ...`);
-      results.push(
-        ...(await markdownPages(plan.input, toConvert, {
-          outDir: plan.out,
-          total,
-          onProgress,
-          frontMatter: plan.frontMatter,
-        }))
-      );
-    }
-    summarize(results, "converted");
-    return;
-  }
-
+  // Both outputs replay each page in a browser, so both need the server -- and
+  // it only starts if there is actually HTML to work on.
   if (toConvert.length) {
-    // The replay server and browser only start if there is HTML to print.
+    const opts = plan.mode === "markdown" ? plan.markdown : plan.render;
+    const workers = Math.max(1, opts.concurrency || 1);
+    const verb = plan.mode === "markdown" ? "Converting" : "Rendering";
     const server = await startServer(plan.input);
     try {
-      const workers = Math.max(1, plan.render.concurrency || 1);
       console.error(
-        `Rendering ${toConvert.length} page(s) to ${plan.out}/ ` +
+        `${verb} ${toConvert.length} page(s) to ${plan.out}/ ` +
           `(${workers} worker${workers > 1 ? "s" : ""}) ...`
       );
+      const args = { origin: server.origin, outDir: plan.out, total, onProgress };
       results.push(
-        ...(await renderPages(toConvert, {
-          origin: server.origin,
-          outDir: plan.out,
-          opts: plan.render,
-          total,
-          onProgress,
-        }))
+        ...(plan.mode === "markdown"
+          ? await markdownPages(toConvert, { ...args, opts: plan.markdown })
+          : await renderPages(toConvert, { ...args, opts: plan.render }))
       );
     } finally {
       await server.close();
     }
   }
-  summarize(results, "rendered");
+  summarize(results, plan.mode === "markdown" ? "converted" : "rendered");
 }
 
 async function main(): Promise<void> {

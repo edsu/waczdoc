@@ -35,7 +35,7 @@ export function extractPages(
       const base = { ...job, file, via: "extract" as const, total: total ?? jobs.length };
       let result: PageResult;
       try {
-        fs.writeFileSync(file, readJobPayload(zip, job, digestIndex).bytes);
+        fs.writeFileSync(file, readJobPayload(zip, job, digestIndex));
         result = { ...base, ok: true };
       } catch (err) {
         result = { ...base, ok: false, error: err instanceof Error ? err.message : String(err) };

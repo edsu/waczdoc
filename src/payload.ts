@@ -30,19 +30,13 @@ export function digestIndexer(zip: ZipHandle): DigestIndex {
     })());
 }
 
-export interface JobPayload {
-  bytes: Buffer;
-  // Charset the server declared, for callers that have to decode the bytes.
-  charset: string;
-}
-
 // Return the archived bytes for one page. Throws on anything that would leave
 // a bad file behind; callers turn that into a failed result for that page.
 export function readJobPayload(
   zip: ZipHandle,
   job: PageJob,
   digestIndex: DigestIndex
-): JobPayload {
+): Buffer {
   if (!job.locator) throw new Error("no CDX record for this URL");
   let rec = readWarcPayload(zip, job.locator);
 
@@ -57,5 +51,5 @@ export function readJobPayload(
 
   if (rec.payload.length === 0) throw new Error("empty payload");
   if (rec.digestOk === false) throw new Error("payload digest mismatch");
-  return { bytes: rec.payload, charset: rec.charset };
+  return rec.payload;
 }

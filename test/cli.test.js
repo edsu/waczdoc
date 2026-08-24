@@ -38,14 +38,12 @@ test("output directory defaults per format and -o overrides it", () => {
 
 // The options that only make sense for one format are not accepted by the
 // other -- which is the whole reason for using subcommands.
-test("PDF-only options are rejected by the markdown subcommand", () => {
+test("paper and PDF-only options are rejected by the markdown subcommand", () => {
   for (const opt of [
     ["--format", "A4"],
     ["--landscape"],
     ["--single-page"],
     ["--print-media"],
-    ["-j", "4"],
-    ["--inject", "x"],
     ["--no-extract"],
   ]) {
     assert.throws(
@@ -56,13 +54,26 @@ test("PDF-only options are rejected by the markdown subcommand", () => {
   }
 });
 
+// Both outputs replay each page in a browser, so the replay knobs are shared.
+test("replay options are accepted by both output subcommands", () => {
+  assert.equal(plan("markdown", "a.wacz", "-j", "4").markdown.concurrency, 4);
+  assert.equal(plan("pdf", "a.wacz", "-j", "4").render.concurrency, 4);
+  assert.match(plan("markdown", "a.wacz", "--inject", "go()").markdown.inject, /go\(\)/);
+  assert.match(plan("pdf", "a.wacz", "--inject", "go()").render.inject, /go\(\)/);
+});
+
+test("replay options are not offered by list, which writes nothing", () => {
+  assert.throws(() => plan("list", "a.wacz", "-j", "4"), /unknown option/i);
+  assert.throws(() => plan("list", "a.wacz", "--inject", "x"), /unknown option/i);
+});
+
 test("markdown-only options are rejected by the pdf subcommand", () => {
   assert.throws(() => plan("pdf", "a.wacz", "--no-front-matter"), /unknown option/i);
 });
 
 test("front matter is on by default and --no-front-matter turns it off", () => {
-  assert.equal(plan("markdown", "a.wacz").frontMatter, true);
-  assert.equal(plan("markdown", "a.wacz", "--no-front-matter").frontMatter, false);
+  assert.equal(plan("markdown", "a.wacz").markdown.frontMatter, true);
+  assert.equal(plan("markdown", "a.wacz", "--no-front-matter").markdown.frontMatter, false);
 });
 
 test("archived PDFs are extracted unless --no-extract says otherwise", () => {

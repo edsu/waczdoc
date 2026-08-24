@@ -23,10 +23,6 @@ export interface WarcPayload {
   warcType: string;
   status: number;
   contentType: string;
-  // The Content-Type charset parameter, lowercased; "" when absent. The server
-  // is the most authoritative source for a page's encoding, so this beats
-  // sniffing the bytes.
-  charset: string;
   // true/false when the CDX recorded a digest we could check, null otherwise.
   digestOk: boolean | null;
 }
@@ -47,12 +43,6 @@ function warcEntryName(zip: ZipHandle, filename: string): string {
 function header(headers: string, name: string): string {
   const m = new RegExp(`^${name}:[ \\t]*(.*)$`, "im").exec(headers);
   return m ? m[1].trim() : "";
-}
-
-// Pull the charset parameter out of a Content-Type value.
-function charsetOf(contentType: string): string {
-  const m = /;\s*charset\s*=\s*"?([^";,\s]+)"?/i.exec(contentType);
-  return m ? m[1].toLowerCase() : "";
 }
 
 // Undo HTTP chunked transfer-encoding.
@@ -187,14 +177,7 @@ export function readWarcPayload(zip: ZipHandle, loc: WarcLocator): WarcPayload {
   // A revisit record is a pointer to a payload stored elsewhere (crawl-level
   // dedup), so there is nothing to return; the caller resolves it by digest.
   if (warcType === "revisit") {
-    return {
-      payload: Buffer.alloc(0),
-      warcType,
-      status: 0,
-      contentType: "",
-      charset: "",
-      digestOk: null,
-    };
+    return { payload: Buffer.alloc(0), warcType, status: 0, contentType: "", digestOk: null };
   }
 
   const endHttp = rec.indexOf(CRLF2, endWarc + 4);
@@ -211,13 +194,11 @@ export function readWarcPayload(zip: ZipHandle, loc: WarcLocator): WarcPayload {
   const encoding = header(httpHeaders, "Content-Encoding").toLowerCase();
   const payload = encoding ? decodeBody(stored, encoding) : stored;
 
-  const rawContentType = header(httpHeaders, "Content-Type");
   return {
     payload,
     warcType,
     status,
-    contentType: rawContentType.split(";")[0].trim().toLowerCase(),
-    charset: charsetOf(rawContentType),
+    contentType: header(httpHeaders, "Content-Type").split(";")[0].trim().toLowerCase(),
     digestOk,
   };
 }

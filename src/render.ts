@@ -1,4 +1,4 @@
-import { chromium, type Page, type BrowserContext } from "playwright";
+import { chromium, type Page, type Frame, type BrowserContext } from "playwright";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
@@ -25,12 +25,29 @@ export interface RenderOptions {
 
 export type RenderResult = PageResult;
 
+// Everything a capture needs: the replayed page's frame, plus the tab it lives
+// in (for whole-tab operations like printing) and where to write.
+export interface CaptureContext {
+  page: Page;
+  frame: Frame;
+  job: PageJob;
+  file: string;
+  origin: string;
+  opts: RenderOptions;
+}
+
+// The part that differs per output format. Runs after the replayed page has
+// loaded, settled, and had any --inject script applied.
+export type Capture = (ctx: CaptureContext) => Promise<void>;
+
 interface Cfg {
   outDir: string;
+  ext: string;
   timeout: number;
   settleMs: number;
-  singlePage: boolean;
-  pdfBase: PdfOptions;
+  capture: Capture;
+  via: PageResult["via"];
+  opts: RenderOptions;
   inject?: string;
 }
 
@@ -45,12 +62,57 @@ function replayUrl(origin: string, ts: string, url: string): string {
   return `${origin}/w/${COLL}/${ts || "2"}mp_/${url}`;
 }
 
-// Render one page in the given tab and return a result record. Pure per-page
-// work — no shared state — so tabs can run these concurrently.
-async function renderOne(page: Page, origin: string, p: PageJob, cfg: Cfg): Promise<RenderResult> {
-  const { outDir, timeout, settleMs, singlePage, pdfBase, inject } = cfg;
-  const file = path.join(outDir, urlToFilename(p.url, p.index));
-  const base = { ...p, file, via: "render" as const };
+// Grow the iframe to its content height so the whole page prints, and report
+// the height so the caller can size a single-page PDF.
+async function fitToContent(page: Page, frame: Frame): Promise<number> {
+  const height = await frame
+    .evaluate(() =>
+      Math.max(
+        document.body ? document.body.scrollHeight : 0,
+        document.documentElement ? document.documentElement.scrollHeight : 0
+      )
+    )
+    .catch(() => 0);
+  if (height) {
+    await page.evaluate((h) => {
+      (document.getElementById("replay") as HTMLElement).style.height = h + "px";
+    }, height);
+  }
+  return height;
+}
+
+// Print the replayed page. Sized to its content with --single-page, otherwise
+// paginated onto the chosen paper.
+export const capturePdf: Capture = async ({ page, frame, file, opts }) => {
+  const height = await fitToContent(page, frame);
+  const base: PdfOptions = {
+    format: opts.format as PdfOptions["format"],
+    landscape: !!opts.landscape,
+    scale: opts.scale ?? 1,
+    printBackground: opts.background ?? true,
+  };
+  if (opts.singlePage && height) {
+    await page.pdf({
+      ...base,
+      path: file,
+      width: `${VIEWPORT_WIDTH}px`,
+      height: `${height + 8}px`,
+      margin: { top: 0, bottom: 0, left: 0, right: 0 },
+    });
+  } else {
+    await page.pdf({
+      ...base,
+      path: file,
+      margin: { top: "0.4in", bottom: "0.4in", left: "0.4in", right: "0.4in" },
+    });
+  }
+};
+
+// Load one page in the given tab, settle it, and hand it to the capture.
+async function replayOne(page: Page, origin: string, p: PageJob, cfg: Cfg): Promise<PageResult> {
+  const { outDir, ext, timeout, settleMs, capture, via, opts, inject } = cfg;
+  const file = path.join(outDir, urlToFilename(p.url, p.index, ext));
+  const base = { ...p, file, via };
   const target = replayUrl(origin, p.timestamp, p.url);
   try {
     // Point the iframe at the replay URL and wait for its load event OR the
@@ -75,66 +137,27 @@ async function renderOne(page: Page, origin: string, p: PageJob, cfg: Cfg): Prom
     const frame = page
       .frames()
       .find((f) => f.name() === "replay" || /\/w\/coll\//.test(f.url()));
-    if (frame) {
-      await frame.waitForLoadState("networkidle", { timeout }).catch(() => {});
-    }
+    if (!frame) return { ...base, ok: false, error: "replay frame never appeared" };
+
+    await frame.waitForLoadState("networkidle", { timeout }).catch(() => {});
     await page.waitForTimeout(settleMs);
 
-    const notFound = frame
-      ? await frame
-          .evaluate(() =>
-            /Archived Page Not Found/i.test(document.body?.innerText || "")
-          )
-          .catch(() => false)
-      : true;
-    if (notFound) {
-      return { ...base, ok: false, error: "not found in archive during replay" };
-    }
+    const notFound = await frame
+      .evaluate(() => /Archived Page Not Found/i.test(document.body?.innerText || ""))
+      .catch(() => false);
+    if (notFound) return { ...base, ok: false, error: "not found in archive during replay" };
 
     // Run the user's injection script inside the replayed page, before
-    // measuring/printing — e.g. to remove modal overlays or unlock scrolling.
-    // Wrapped in an async IIFE and run via Playwright's evaluation channel,
-    // which is not subject to the archived page's CSP. Best-effort: a failing
-    // script must not fail the render.
-    if (inject && frame) {
-      await frame
-        .evaluate(`(async () => { ${inject}\n})()`)
-        .catch(() => {});
+    // capturing -- e.g. to remove modal overlays or unlock scrolling. Wrapped
+    // in an async IIFE and run via Playwright's evaluation channel, which is
+    // not subject to the archived page's CSP. Best-effort: a failing script
+    // must not fail the capture.
+    if (inject) {
+      await frame.evaluate(`(async () => { ${inject}\n})()`).catch(() => {});
       await page.waitForTimeout(150); // let any reflow settle
     }
 
-    // Grow the iframe to its content height so the whole page prints.
-    const height = frame
-      ? await frame
-          .evaluate(() =>
-            Math.max(
-              document.body ? document.body.scrollHeight : 0,
-              document.documentElement ? document.documentElement.scrollHeight : 0
-            )
-          )
-          .catch(() => 0)
-      : 0;
-    if (height) {
-      await page.evaluate((h) => {
-        (document.getElementById("replay") as HTMLElement).style.height = h + "px";
-      }, height);
-    }
-
-    if (singlePage && height) {
-      await page.pdf({
-        ...pdfBase,
-        path: file,
-        width: `${VIEWPORT_WIDTH}px`,
-        height: `${height + 8}px`,
-        margin: { top: 0, bottom: 0, left: 0, right: 0 },
-      });
-    } else {
-      await page.pdf({
-        ...pdfBase,
-        path: file,
-        margin: { top: "0.4in", bottom: "0.4in", left: "0.4in", right: "0.4in" },
-      });
-    }
+    await capture({ page, frame, job: p, file, origin, opts });
     return { ...base, ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -156,28 +179,30 @@ async function openTab(
   return page;
 }
 
-export interface RenderArgs {
+export interface ReplayArgs {
   origin: string;
   outDir: string;
+  // Output file extension, and how to produce each file.
+  ext: string;
+  capture: Capture;
+  via: PageResult["via"];
   opts?: RenderOptions;
-  // Overall job count, for progress display across both passes.
+  // Overall job count, for progress display across passes.
   total?: number;
-  onProgress?: (r: RenderResult) => void;
+  onProgress?: (r: PageResult) => void;
 }
 
-export async function renderPages(
+// Drive a pool of tabs over the given pages, replaying each one and handing it
+// to `capture`. Everything up to the capture -- the server, the service worker,
+// the tab pool, load/settle waiting, injection -- is shared by every output.
+export async function replayPages(
   pages: PageJob[],
-  { origin, outDir, opts = {}, total, onProgress }: RenderArgs
-): Promise<RenderResult[]> {
+  { origin, outDir, ext, capture, via, opts = {}, total, onProgress }: ReplayArgs
+): Promise<PageResult[]> {
   const {
-    format = "Letter",
-    landscape = false,
     screenMedia = true,
     timeout = 30000,
-    scale = 1,
-    background = true,
     settleMs = 700,
-    singlePage = false,
     concurrency = 1,
     inject,
   } = opts;
@@ -185,19 +210,7 @@ export async function renderPages(
   const workers = Math.max(1, Math.min(concurrency, pages.length));
   fs.mkdirSync(outDir, { recursive: true });
 
-  const cfg: Cfg = {
-    outDir,
-    timeout,
-    settleMs,
-    singlePage,
-    inject,
-    pdfBase: {
-      format: format as PdfOptions["format"],
-      landscape,
-      scale,
-      printBackground: background,
-    },
-  };
+  const cfg: Cfg = { outDir, ext, timeout, settleMs, capture, via, opts, inject };
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -205,7 +218,7 @@ export async function renderPages(
     deviceScaleFactor: 2,
   });
 
-  const results: RenderResult[] = new Array(pages.length);
+  const results: PageResult[] = new Array(pages.length);
   try {
     // First tab registers the SW and loads the WACZ into it (paid once).
     const first = await context.newPage();
@@ -228,7 +241,7 @@ export async function renderPages(
       for (;;) {
         const i = cursor++;
         if (i >= pages.length) return;
-        const r = await renderOne(page, origin, pages[i], cfg);
+        const r = await replayOne(page, origin, pages[i], cfg);
         r.total = total ?? pages.length;
         results[i] = r;
         if (onProgress) onProgress(r);
@@ -240,6 +253,31 @@ export async function renderPages(
     await browser.close();
   }
   return results;
+}
+
+export interface RenderArgs {
+  origin: string;
+  outDir: string;
+  opts?: RenderOptions;
+  total?: number;
+  onProgress?: (r: RenderResult) => void;
+}
+
+// Render each page to PDF.
+export function renderPages(
+  pages: PageJob[],
+  { origin, outDir, opts = {}, total, onProgress }: RenderArgs
+): Promise<RenderResult[]> {
+  return replayPages(pages, {
+    origin,
+    outDir,
+    ext: "pdf",
+    capture: capturePdf,
+    via: "render",
+    opts,
+    total,
+    onProgress,
+  });
 }
 
 // Sensible default worker count when the user asks to parallelize without a

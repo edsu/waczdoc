@@ -31,16 +31,16 @@ That second path is not a niche case. In one government-site crawl, 758 of the
 925 pages were PDFs: they extract in well under a second, against minutes of
 Chromium time for a far worse result.
 
-`waczdoc markdown` gives HTML pages a third path: their archived bytes are read
-straight out of the WARC and the article is extracted with
-[defuddle](https://github.com/kepano/defuddle). No replay, no browser — see
+`waczdoc markdown` replays each page the same way, but instead of printing it,
+reads its rendered DOM and extracts the article with
+[defuddle](https://github.com/kepano/defuddle) — see
 [Markdown output](#markdown-output).
 
 ## Install
 
-The `pdf` command uses Playwright's Chromium, so download it once (a one-time
-~150 MB fetch into Playwright's shared cache). `markdown` and `list` need no
-browser, so you can skip this if PDF isn't what you're after:
+Both `pdf` and `markdown` replay pages in Playwright's Chromium, so download it
+once (a one-time ~150 MB fetch into Playwright's shared cache). Only `list`
+works without it:
 
 ```sh
 npx playwright install chromium
@@ -70,7 +70,7 @@ only the options that apply to it:
 # Turn every page in the archive into a PDF under ./pdfs/
 waczdoc pdf archive.wacz
 
-# Extract each page's article as Markdown under ./markdown/ (no browser)
+# Extract each page's article as Markdown under ./markdown/
 waczdoc markdown archive.wacz
 
 # Just list the pages found, with what each one is (no output written)
@@ -96,6 +96,13 @@ Shared by every subcommand:
 | `--exclude <re>` | Skip pages whose URL matches this regex (repeatable) |
 | `--limit <n>` | Process at most `n` pages |
 
+Shared by `pdf` and `markdown`, which both replay each page in a browser:
+
+| Flag | Description |
+| --- | --- |
+| `-j, --concurrency <n>` | Replay `n` pages in parallel (default `1`; `auto` = cores − 2) |
+| `--inject <js>` | Run JS in each page before capturing; `@file` reads from a file (repeatable) |
+
 `waczdoc pdf` only:
 
 | Flag | Description |
@@ -103,9 +110,7 @@ Shared by every subcommand:
 | `--format <name>` | Paper size: `Letter`, `A4`, `Legal`, … (default `Letter`) |
 | `--landscape` | Landscape orientation |
 | `--single-page` | One continuous page per article, sized to content (no pagination) |
-| `-j, --concurrency <n>` | Render `n` pages in parallel (default `1`; `auto` = cores − 2) |
 | `--print-media` | Use print CSS instead of screen CSS (screen is the default) |
-| `--inject <js>` | Run JS in each page before printing; `@file` reads from a file (repeatable) |
 | `--no-extract` | Replay archived PDFs in the browser instead of copying them out (rarely what you want) |
 
 `waczdoc markdown` only:
@@ -125,12 +130,16 @@ WACZ ─► read page list + CDX                             src/wacz.ts
      ├─ PDF  ─► copy bytes out of the WARC ─► file       src/extract.ts, src/payload.ts
      └─ HTML ─► serve sw.js + WACZ (HTTP Range)          src/server.ts
                 headless Chromium + wabac service worker
-                └─ replay in an <iframe> ─► page.pdf()   src/render.ts
-
-     waczdoc markdown:
-     └─ HTML ─► bytes out of the WARC ─► linkedom        src/markdown.ts
-                └─ defuddle ─► article as Markdown
+                replay in an <iframe>, settle, --inject   src/render.ts
+                ├─ pdf      ─► page.pdf()                src/render.ts
+                └─ markdown ─► serialize the rendered DOM src/markdown.ts
+                               un-rewrite replay URLs     src/replayurl.ts
+                               defuddle ─► Markdown
 ```
+
+Everything up to the branch is shared: the server, the service worker, the tab
+pool, load/settle waiting, injection. The two outputs differ only in what they
+do with a loaded page, expressed as a `Capture` function.
 
 Argument parsing turns argv into a single `Plan` object and does nothing else
 (`src/cli.ts`), so the whole command surface is testable without touching an
@@ -230,11 +239,12 @@ Notes:
 waczdoc markdown archive.wacz -o markdown
 ```
 
-The archived HTML is read straight out of the WARC — the same ranged read used
-to extract PDFs — parsed with [linkedom](https://github.com/WebReflection/linkedom), and
-handed to [defuddle](https://github.com/kepano/defuddle), which picks the
-article out of the surrounding navigation and converts it to Markdown. Each
-file gets YAML front matter from the page's metadata and the capture record:
+The page is replayed exactly as it is for PDF output — wabac's service worker in
+headless Chromium, subresources served from the archive, scripts executed — and
+then its **rendered DOM** is serialized and handed to
+[defuddle](https://github.com/kepano/defuddle), which picks the article out of
+the surrounding navigation and converts it to Markdown. Each file gets YAML
+front matter from the page's metadata and the capture record:
 
 ```markdown
 ---
@@ -253,33 +263,50 @@ Fascism is back. Nazi propaganda is appearing [on college campuses](…)
 
 Use `--no-front-matter` for bare content.
 
-No browser is involved on this path, which makes it fast: an 854-page magazine
-crawl converts in 19 seconds, and a 761-page news crawl in 148 seconds, both
-single-threaded. Links and image URLs are the ones the crawler saw, because
-nothing goes through replay's URL rewriting.
+### Why the rendered DOM, and not the archived HTML
 
-The character encoding comes from the server's own `Content-Type`, falling back
-to a `<meta charset>` and then to UTF-8. Reading the archive directly is the
-only way to see that header — a browser replaying the page is the only other
-thing that ever does.
+Reading the HTML the server originally sent would be far faster — no browser at
+all. It is also wrong for a large and growing share of the web: a page that
+assembles its content in JavaScript archives correctly and replays correctly,
+but its initial HTML is an empty shell, so there is nothing in it to extract.
+The content is in the archive; it just isn't in that document.
 
-The tradeoff is that this sees only what the server sent:
+So Markdown goes through replay, at replay's cost. Two pages of output from one
+archive should agree about what the page contained, and the only way to
+guarantee that is to read them from the same place.
 
-- **A page that builds its content in JavaScript has nothing to extract.** It
-  archives and replays fine, but its HTML is an empty shell, so it is reported
-  as `no article content found`. Render those to PDF instead.
+It also means `--inject` applies here. Paywall and sign-in overlays are exactly
+the case where the article is in the DOM with something painted over it, so the
+same script that rescues a PDF (`examples/dismiss-modal.js`) rescues the
+Markdown.
+
+### URLs
+
+wabac rewrites every URL in a replayed page so subresource requests come back
+through the replay server, in both absolute and root-relative forms:
+
+```
+http://127.0.0.1:8090/w/coll/:<hash>/20230105164613im_/https://example.org/a.jpg
+                     /w/coll/:<hash>/20230105164613mp_/https://example.org/page
+```
+
+Correct for replay, useless in a file meant to outlive the process — the origin
+is an ephemeral localhost port. Both forms are stripped before parsing
+(`src/replayurl.ts`), so links and images carry the URLs the crawler saw.
+
+### What still won't produce an article
+
 - **Index and listing pages have no article.** A homepage or `/tag/` listing
   yields a near-empty file rather than an error — check `words` in the front
   matter, or filter them out with `--exclude`.
-- **Non-article formats are refused, not converted.** Archives whose page list
-  records no mime type are assumed to be HTML (see
-  [Where the page list comes from](#where-the-page-list-comes-from)), so a
-  binary file can reach the parser, which will happily turn an EPUB into
-  thousands of words of mojibake. Byte signatures are checked first and those
-  pages fail with `not HTML: looks like …`.
+- **Non-article formats.** Archives whose page list records no mime type are
+  assumed to be HTML (see
+  [Where the page list comes from](#where-the-page-list-comes-from)), so an
+  EPUB or MOBI can end up queued. Replaying one produces nothing an article
+  parser can use, and the page fails with `no article content found`.
 
-Archived PDFs are still copied out as-is, so a `markdown` output directory can
-contain `.pdf` files too.
+Archived PDFs are copied out as-is rather than converted, so a `markdown` output
+directory can contain `.pdf` files too.
 
 ## Converting further with pandoc
 
@@ -332,33 +359,31 @@ CI (GitHub Actions) runs lint, build, and the full test suite on push and PRs.
 Extracting archived PDFs is essentially free — a ranged read and a gunzip per
 file, no browser — so an archive that is mostly PDFs finishes in seconds.
 
-Rendering is the expensive half, and is CPU-bound: each page is a real Chromium
-render. By default pages render one at a time. Pass `-j <n>` (or `-j auto`) to render several in
-parallel, where each runs in its own tab/renderer process, so it scales roughly
-linearly up to your physical core count.
+Replay is the expensive half, for both outputs, and it is dominated by page load
+rather than by the capture: each page waits for its `load` event, then for the
+frame to reach network-idle, then for a fixed settle delay, and a page that
+never reaches network-idle waits out the full timeout before being captured
+anyway. Printing or serializing afterwards is comparatively free.
 
-All tabs share a single browser and a single wabac service worker, so the
-archive's index is loaded only once no matter how many workers you use. The
-trade-off at high concurrency is memory: N tabs accumulate N× the renderer
-state over a long run.
+By default pages replay one at a time. Pass `-j <n>` (or `-j auto`) to run
+several in parallel, each in its own tab and renderer process, which scales
+roughly linearly up to your physical core count. All tabs share a single browser
+and a single wabac service worker, so the archive's index is loaded only once no
+matter how many workers you use. The trade-off at high concurrency is memory:
+N tabs accumulate N× the renderer state over a long run.
 
-Markdown conversion sits between the two: no browser, but each page still has
-to be parsed into a DOM. Measured at 46 pages/second on one core for the
-magazine crawl and 5 pages/second for a heavier news site, so it is dominated
-by page size rather than by page count.
-
-`linkedom` rather than `jsdom` for the DOM, for two measured reasons. jsdom
-retained roughly 20 MB per parsed page — enough to exhaust a default heap part
-way through a 761-page archive — where linkedom stays flat. And because jsdom
-implements the layout API without a layout engine, every element reports zero
-size and defuddle's visibility heuristics prune content that is really there:
-across 838 articles, jsdom dropped subtitles and leaked raw `<audio>` markup
-into 172 files, against 5 for linkedom.
+`linkedom` rather than `jsdom` for parsing the serialized DOM, for two measured
+reasons. jsdom retained roughly 20 MB per parsed page — enough to exhaust a
+default heap part way through a 761-page archive — where linkedom stays flat.
+And because jsdom implements the layout API without a layout engine, every
+element reports zero size and defuddle's visibility heuristics prune content
+that is really there: across 838 articles, jsdom dropped subtitles and leaked
+raw `<audio>` markup into 172 files, against 5 for linkedom.
 
 ## Known limitations
 
 - JS-heavy / SPA pages may render partially if not all their requests were
-  captured, and yield no article at all under `waczdoc markdown`.
+  captured — whatever replay can reconstruct is what both outputs see.
 - Pages captured multiple times are deduplicated to the most recent capture.
 - Pages that are neither HTML nor PDF (Word documents, plain text, …) are
   reported and skipped.
