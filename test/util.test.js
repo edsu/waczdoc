@@ -37,6 +37,16 @@ test("non-URL input still yields a safe filename", () => {
   assert.match(name, /^0001_.*\.pdf$/);
 });
 
+test("the extension is configurable, for markdown output", () => {
+  assert.equal(
+    urlToFilename("https://example.com/news/story", 1, "md"),
+    "0002_example.com_news_story.md"
+  );
+  // The don't-double-suffix rule follows the requested extension.
+  assert.equal(urlToFilename("https://example.com/a.md", 0, "md"), "0001_example.com_a.md");
+  assert.equal(urlToFilename("https://example.com/a.pdf", 0, "md"), "0001_example.com_a.pdf.md");
+});
+
 test("a URL already ending in .pdf doesn't get a second extension", () => {
   assert.equal(
     urlToFilename("https://example.org/docs/report.pdf", 0),

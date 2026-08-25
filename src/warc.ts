@@ -124,6 +124,45 @@ function trimRecordTrailer(buf: Buffer): Buffer {
   return buf.subarray(0, buf.length - (buf.subarray(-4).toString("latin1") === CRLF2 ? 4 : 0));
 }
 
+// Plausible readings of the entity body, best guess first.
+//
+// The stored bytes are not always in the shape the headers describe. Crawlers
+// commonly record an already-de-chunked body while keeping the response's
+// original "Transfer-Encoding: chunked" header -- and de-chunking such a body
+// finds no valid chunk length, so it yields nothing at all. So the headers are
+// a hint about how to cut the body, not a fact; the caller lets the recorded
+// digest choose between the readings they suggest.
+function bodyCandidates(body: Buffer, httpHeaders: string): Buffer[] {
+  const out: Buffer[] = [];
+  const contentLength = parseInt(header(httpHeaders, "Content-Length"), 10);
+  if (header(httpHeaders, "Transfer-Encoding").toLowerCase().includes("chunked")) {
+    const dechunked = dechunk(body);
+    if (dechunked.length) out.push(dechunked);
+  } else if (Number.isFinite(contentLength) && contentLength <= body.length) {
+    // Required: without this we keep the 4-byte WARC record separator and the
+    // payload no longer matches its recorded digest.
+    out.push(body.subarray(0, contentLength));
+  }
+  out.push(trimRecordTrailer(body));
+  return out;
+}
+
+// Choose the reading the recorded digest vouches for. With no digest, or one in
+// a form we don't recognise, there is nothing to check against -- take the
+// first reading and report no opinion rather than a mismatch.
+function pickBody(
+  candidates: Buffer[],
+  digest?: string
+): { stored: Buffer; digestOk: boolean | null } {
+  if (!digest) return { stored: candidates[0], digestOk: null };
+  for (const candidate of candidates) {
+    const verdict = digestMatches(candidate, digest);
+    if (verdict === true) return { stored: candidate, digestOk: true };
+    if (verdict === null) return { stored: candidates[0], digestOk: null };
+  }
+  return { stored: candidates[0], digestOk: false };
+}
+
 // Read the record at `loc` and return its HTTP entity body.
 export function readWarcPayload(zip: ZipHandle, loc: WarcLocator): WarcPayload {
   const raw = zip.readRange(warcEntryName(zip, loc.filename), loc.offset, loc.length);
@@ -146,23 +185,14 @@ export function readWarcPayload(zip: ZipHandle, loc: WarcLocator): WarcPayload {
   const httpHeaders = rec.toString("latin1", endWarc + 4, endHttp);
   const status = parseInt(httpHeaders.split("\r\n")[0].split(/\s+/)[1] ?? "", 10) || 0;
 
-  let body = rec.subarray(endHttp + 4);
-  const contentLength = parseInt(header(httpHeaders, "Content-Length"), 10);
-  if (header(httpHeaders, "Transfer-Encoding").toLowerCase().includes("chunked")) {
-    body = dechunk(body);
-  } else if (Number.isFinite(contentLength)) {
-    // Required: without this we keep the 4-byte WARC record separator and the
-    // payload no longer matches its recorded digest.
-    body = body.subarray(0, contentLength);
-  } else {
-    body = trimRecordTrailer(body);
-  }
-
   // The digest covers the body as stored, i.e. before Content-Encoding is
-  // reversed -- so verify first, then decode.
-  const digestOk = loc.digest ? digestMatches(body, loc.digest) : null;
+  // reversed -- so choose and verify first, then decode.
+  const { stored, digestOk } = pickBody(
+    bodyCandidates(rec.subarray(endHttp + 4), httpHeaders),
+    loc.digest
+  );
   const encoding = header(httpHeaders, "Content-Encoding").toLowerCase();
-  const payload = encoding ? decodeBody(body, encoding) : body;
+  const payload = encoding ? decodeBody(stored, encoding) : stored;
 
   return {
     payload,

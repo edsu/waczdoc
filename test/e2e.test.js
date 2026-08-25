@@ -8,8 +8,8 @@ import { FIXTURE_1, tmpDir } from "./helpers.js";
 
 // Full replay+print path through wabac in headless Chromium. Requires the
 // Playwright Chromium browser (npx playwright install chromium). Set
-// WACZ_PDF_SKIP_E2E=1 to skip (e.g. where a browser can't be installed).
-const skip = !!process.env.WACZ_PDF_SKIP_E2E;
+// WACZDOC_SKIP_E2E=1 to skip (e.g. where a browser can't be installed).
+const skip = !!process.env.WACZDOC_SKIP_E2E;
 
 test(
   "renders a fixture page to a real PDF",
